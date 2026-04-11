@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@decoy/ui": ["packages/ui/src"],
+      "@decoy/config": ["packages/config/src"],
+      "@decoy/types": ["packages/types/src"],
+      "@decoy/game-engine": ["packages/game-engine/src"],
+      "@decoy/backend": ["packages/backend/src"]
+    }
+  }
+}
