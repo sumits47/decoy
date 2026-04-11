@@ -12,6 +12,7 @@ import {
   startGame as startGameState,
   submitAnswer as submitRoundAnswer
 } from '@decoy/game-engine';
+import { prisma } from '@decoy/database';
 import type { LobbyCode, LobbyMembership, LobbyState, Player, PlayerId, PlayerSessionToken, RoundState } from '@decoy/types';
 
 class LobbyError extends Error {
@@ -23,29 +24,6 @@ class LobbyError extends Error {
   }
 }
 
-type LobbyStore = Map<LobbyCode, LobbyState>;
-type SessionRecord = { code: LobbyCode; playerId: PlayerId };
-type SessionStore = Map<PlayerSessionToken, SessionRecord>;
-
-const globalStore = globalThis as typeof globalThis & {
-  __decoyLobbyStore__?: LobbyStore;
-  __decoyPlayerSessionStore__?: SessionStore;
-};
-
-function getStore(): LobbyStore {
-  if (!globalStore.__decoyLobbyStore__) {
-    globalStore.__decoyLobbyStore__ = new Map();
-  }
-  return globalStore.__decoyLobbyStore__;
-}
-
-function getSessionStore(): SessionStore {
-  if (!globalStore.__decoyPlayerSessionStore__) {
-    globalStore.__decoyPlayerSessionStore__ = new Map();
-  }
-  return globalStore.__decoyPlayerSessionStore__;
-}
-
 function normalizeCode(code: string) {
   return code.trim().toUpperCase();
 }
@@ -54,15 +32,37 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function requireLobby(code: string) {
-  const lobby = getStore().get(normalizeCode(code));
-  if (!lobby) throw new LobbyError(404, 'Lobby not found.');
-  return lobby;
+function deserializeLobby(stateJson: unknown): LobbyState {
+  return clone(stateJson as LobbyState);
 }
 
-function saveLobby(lobby: LobbyState) {
-  getStore().set(normalizeCode(lobby.code), clone(lobby));
-  return clone(lobby);
+function serializeLobby(lobby: LobbyState) {
+  return clone(lobby) as any;
+}
+
+async function requireLobby(code: string) {
+  const lobbyRecord = await prisma.lobby.findUnique({ where: { code: normalizeCode(code) } });
+  if (!lobbyRecord) throw new LobbyError(404, 'Lobby not found.');
+  return deserializeLobby(lobbyRecord.stateJson);
+}
+
+async function saveLobby(lobby: LobbyState) {
+  const snapshot = clone(lobby);
+  await prisma.lobby.upsert({
+    where: { code: normalizeCode(snapshot.code) },
+    create: {
+      id: snapshot.id,
+      code: normalizeCode(snapshot.code),
+      hostPlayerId: snapshot.hostPlayerId,
+      createdAt: new Date(snapshot.createdAt),
+      stateJson: serializeLobby(snapshot)
+    },
+    update: {
+      hostPlayerId: snapshot.hostPlayerId,
+      stateJson: serializeLobby(snapshot)
+    }
+  });
+  return snapshot;
 }
 
 function requirePlayer(lobby: LobbyState, playerId: PlayerId) {
@@ -96,55 +96,62 @@ function replaceCurrentRound(lobby: LobbyState, nextRound: RoundState): LobbySta
   };
 }
 
-function createMembership(code: LobbyCode, player: Player): LobbyMembership {
+async function createMembership(code: LobbyCode, player: Player): Promise<LobbyMembership> {
   const playerSessionToken = createId('session');
-  getSessionStore().set(playerSessionToken, { code, playerId: player.id });
+  await prisma.playerSession.create({
+    data: {
+      token: playerSessionToken,
+      lobbyCode: normalizeCode(code),
+      playerId: player.id,
+      playerName: player.name
+    }
+  });
   return { code, playerId: player.id, playerName: player.name, playerSessionToken };
 }
 
-function resolveSessionPlayerId(code: string, playerSessionToken: string): PlayerId | null {
+async function resolveSessionPlayerId(code: string, playerSessionToken: string): Promise<PlayerId | null> {
   if (!playerSessionToken.trim()) return null;
-  const session = getSessionStore().get(playerSessionToken);
+  const session = await prisma.playerSession.findUnique({ where: { token: playerSessionToken } });
   if (!session) return null;
-  return normalizeCode(session.code) === normalizeCode(code) ? session.playerId : null;
+  return normalizeCode(session.lobbyCode) === normalizeCode(code) ? session.playerId : null;
 }
 
-function requireSessionPlayer(lobby: LobbyState, playerSessionToken: string) {
-  const playerId = resolveSessionPlayerId(lobby.code, playerSessionToken);
+async function requireSessionPlayer(lobby: LobbyState, playerSessionToken: string) {
+  const playerId = await resolveSessionPlayerId(lobby.code, playerSessionToken);
   if (!playerId) {
     throw new LobbyError(403, 'Join this lobby from this browser first.');
   }
   return requirePlayer(lobby, playerId);
 }
 
-function requireHostSession(lobby: LobbyState, playerSessionToken: string) {
-  const player = requireSessionPlayer(lobby, playerSessionToken);
+async function requireHostSession(lobby: LobbyState, playerSessionToken: string) {
+  const player = await requireSessionPlayer(lobby, playerSessionToken);
   requireHost(lobby, player.id);
   return player;
 }
 
-export function createLobbySession(hostName: string) {
-  const lobby = saveLobby(createLobbyState(hostName));
+export async function createLobbySession(hostName: string) {
+  const lobby = await saveLobby(createLobbyState(hostName));
   const player = lobby.players.find((candidate) => candidate.id === lobby.hostPlayerId);
   if (!player) throw new LobbyError(500, 'Could not create host session.');
-  return { lobby, player, membership: createMembership(lobby.code, player) };
+  return { lobby, player, membership: await createMembership(lobby.code, player) };
 }
 
-export function createLobby(hostName: string) {
+export async function createLobby(hostName: string) {
   return createLobbySession(hostName);
 }
 
-export function getLobbySnapshot(code: string) {
-  return clone(requireLobby(code));
+export async function getLobbySnapshot(code: string) {
+  return clone(await requireLobby(code));
 }
 
-export function fetchSnapshot(code: string) {
+export async function fetchSnapshot(code: string) {
   return getLobbySnapshot(code);
 }
 
-export function joinLobby(code: string, name: string, existingSessionToken?: string) {
-  const lobby = requireLobby(code);
-  const existingPlayerId = resolveSessionPlayerId(lobby.code, existingSessionToken ?? '');
+export async function joinLobby(code: string, name: string, existingSessionToken?: string) {
+  const lobby = await requireLobby(code);
+  const existingPlayerId = await resolveSessionPlayerId(lobby.code, existingSessionToken ?? '');
   if (existingPlayerId) {
     const player = requirePlayer(lobby, existingPlayerId);
     return {
@@ -169,24 +176,24 @@ export function joinLobby(code: string, name: string, existingSessionToken?: str
     throw new LobbyError(500, 'Could not join lobby.');
   }
 
-  const savedLobby = saveLobby(nextLobby);
-  return { lobby: savedLobby, player: clone(player), membership: createMembership(savedLobby.code, player) };
+  const savedLobby = await saveLobby(nextLobby);
+  return { lobby: savedLobby, player: clone(player), membership: await createMembership(savedLobby.code, player) };
 }
 
-export function startLobbyGame(code: string, actorSessionToken: PlayerSessionToken) {
-  const lobby = requireLobby(code);
-  requireHostSession(lobby, actorSessionToken);
+export async function startLobbyGame(code: string, actorSessionToken: PlayerSessionToken) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
   if (lobby.players.length < 3) throw new LobbyError(400, 'Need at least 3 players.');
   return saveLobby(startGameState(lobby));
 }
 
-export function startGame(code: string, actorSessionToken: PlayerSessionToken) {
+export async function startGame(code: string, actorSessionToken: PlayerSessionToken) {
   return startLobbyGame(code, actorSessionToken);
 }
 
-export function submitLobbyAnswer(code: string, actorSessionToken: PlayerSessionToken, text: string) {
-  const lobby = requireLobby(code);
-  const actor = requireSessionPlayer(lobby, actorSessionToken);
+export async function submitLobbyAnswer(code: string, actorSessionToken: PlayerSessionToken, text: string) {
+  const lobby = await requireLobby(code);
+  const actor = await requireSessionPlayer(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (round.phase !== 'submission') throw new LobbyError(409, 'Submission phase is over.');
 
@@ -195,21 +202,21 @@ export function submitLobbyAnswer(code: string, actorSessionToken: PlayerSession
   return saveLobby(replaceCurrentRound(lobby, nextRound));
 }
 
-export function submitAnswer(code: string, actorSessionToken: PlayerSessionToken, text: string) {
+export async function submitAnswer(code: string, actorSessionToken: PlayerSessionToken, text: string) {
   return submitLobbyAnswer(code, actorSessionToken, text);
 }
 
-export function openLobbyVoting(code: string, actorSessionToken: PlayerSessionToken) {
-  const lobby = requireLobby(code);
-  requireHostSession(lobby, actorSessionToken);
+export async function openLobbyVoting(code: string, actorSessionToken: PlayerSessionToken) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (!allSubmissionsComplete(round)) throw new LobbyError(409, 'Waiting for all submissions.');
   return saveLobby(replaceCurrentRound(lobby, lockSubmissions(round)));
 }
 
-export function submitLobbyVote(code: string, actorSessionToken: PlayerSessionToken, optionId: string) {
-  const lobby = requireLobby(code);
-  const actor = requireSessionPlayer(lobby, actorSessionToken);
+export async function submitLobbyVote(code: string, actorSessionToken: PlayerSessionToken, optionId: string) {
+  const lobby = await requireLobby(code);
+  const actor = await requireSessionPlayer(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (round.phase !== 'voting') throw new LobbyError(409, 'Voting is not open.');
   if (!round.options.some((option) => option.id === optionId)) throw new LobbyError(400, 'Invalid option.');
@@ -234,13 +241,13 @@ export function submitLobbyVote(code: string, actorSessionToken: PlayerSessionTo
   });
 }
 
-export function castVote(code: string, actorSessionToken: PlayerSessionToken, optionId: string) {
+export async function castVote(code: string, actorSessionToken: PlayerSessionToken, optionId: string) {
   return submitLobbyVote(code, actorSessionToken, optionId);
 }
 
-export function revealLobbyRound(code: string, actorSessionToken: PlayerSessionToken) {
-  const lobby = requireLobby(code);
-  requireHostSession(lobby, actorSessionToken);
+export async function revealLobbyRound(code: string, actorSessionToken: PlayerSessionToken) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (!lobby.game) throw new LobbyError(409, 'Game has not started.');
   if (!allVotesComplete(round, lobby.game.players)) throw new LobbyError(409, 'Waiting for all votes.');
@@ -252,9 +259,9 @@ export function revealLobbyRound(code: string, actorSessionToken: PlayerSessionT
   });
 }
 
-export function advanceLobbyRound(code: string, actorSessionToken: PlayerSessionToken) {
-  const lobby = requireLobby(code);
-  requireHostSession(lobby, actorSessionToken);
+export async function advanceLobbyRound(code: string, actorSessionToken: PlayerSessionToken) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (round.phase !== 'reveal') throw new LobbyError(409, 'Round is not ready to advance.');
   if (!lobby.game) throw new LobbyError(409, 'Game has not started.');
@@ -265,13 +272,13 @@ export function advanceLobbyRound(code: string, actorSessionToken: PlayerSession
   });
 }
 
-export function advanceRound(code: string, actorSessionToken: PlayerSessionToken) {
+export async function advanceRound(code: string, actorSessionToken: PlayerSessionToken) {
   return advanceLobbyRound(code, actorSessionToken);
 }
 
-export function resetLobbyGame(code: string, actorSessionToken: PlayerSessionToken) {
-  const lobby = requireLobby(code);
-  requireHostSession(lobby, actorSessionToken);
+export async function resetLobbyGame(code: string, actorSessionToken: PlayerSessionToken) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
   return saveLobby({ ...lobby, game: undefined });
 }
 

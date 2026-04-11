@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { hostName?: string };
-    const result = createLobbySession(body.hostName ?? 'Host');
+    const result = await createLobbySession(body.hostName ?? 'Host');
     return NextResponse.json(result);
   } catch (error) {
     const response = toErrorResponse(error);

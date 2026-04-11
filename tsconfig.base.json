@@ -17,7 +17,8 @@
       "@decoy/config": ["packages/config/src"],
       "@decoy/types": ["packages/types/src"],
       "@decoy/game-engine": ["packages/game-engine/src"],
-      "@decoy/backend": ["packages/backend/src"]
+      "@decoy/backend": ["packages/backend/src"],
+      "@decoy/database": ["packages/database/src"]
     }
   }
 }

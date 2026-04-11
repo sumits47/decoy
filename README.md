@@ -48,11 +48,22 @@ pnpm dev
 pnpm build
 pnpm lint
 pnpm typecheck
+pnpm db:generate
+pnpm db:migrate:dev
+pnpm db:migrate:deploy
+pnpm db:validate
 ```
 
 ## Environment
 
 Copy `.env.example` to `.env.local` (or your preferred local env file) and adjust values as needed.
+
+For Prisma + Neon, set both:
+
+- `DATABASE_URL` for the pooled runtime connection
+- `DIRECT_DATABASE_URL` for migrations / schema operations
+
+The schema and Prisma client live in `packages/database`.
 
 ## Product direction
 

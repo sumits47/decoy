@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { code?: string; name?: string; playerSessionToken?: string };
-    const result = joinLobby(body.code ?? '', body.name ?? '', body.playerSessionToken);
+    const result = await joinLobby(body.code ?? '', body.name ?? '', body.playerSessionToken);
     return NextResponse.json(result);
   } catch (error) {
     const response = toErrorResponse(error);

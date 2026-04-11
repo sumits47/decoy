@@ -1,0 +1,242 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+enum LobbyStatus {
+  OPEN
+  IN_GAME
+  FINISHED
+  ARCHIVED
+}
+
+enum MembershipRole {
+  HOST
+  PLAYER
+  SPECTATOR
+}
+
+enum MembershipStatus {
+  ACTIVE
+  LEFT
+  KICKED
+}
+
+enum GameStatus {
+  DRAFT
+  IN_PROGRESS
+  FINISHED
+  ABANDONED
+}
+
+enum RoundArchetype {
+  BLUFF_TRIVIA
+  OPINION_VOTE
+}
+
+enum ResolutionType {
+  CORRECT_ANSWER
+  AUDIENCE_VOTE
+}
+
+enum RoundPhase {
+  SUBMISSION
+  VOTING
+  REVEAL
+  COMPLETE
+}
+
+enum SubmissionStatus {
+  DRAFT
+  LOCKED
+}
+
+enum VoteKind {
+  ROUND_OPTION
+}
+
+enum ScoreEventType {
+  TRUTH_GUESSED
+  DECOY_FOOLED
+  AUDIENCE_VOTE
+  CROWD_BONUS
+  MANUAL_ADJUSTMENT
+}
+
+model Lobby {
+  id            String            @id @default(cuid())
+  code          String            @unique @db.VarChar(8)
+  hostPlayerId  String
+  status        LobbyStatus       @default(OPEN)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  endedAt       DateTime?
+  stateJson     Json
+  metadata      Json?
+  sessions      PlayerSession[]
+  memberships   LobbyMembership[]
+  games         Game[]
+
+  @@index([status, createdAt])
+}
+
+model Player {
+  id              String             @id @default(cuid())
+  displayName     String             @db.VarChar(64)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  memberships     LobbyMembership[]
+  submissions     Submission[]
+  votes           Vote[]             @relation("VoteCaster")
+  authoredOptions RoundOption[]      @relation("OptionOwner")
+  scoreEvents     ScoreEvent[]       @relation("ScoreRecipient")
+}
+
+model PlayerSession {
+  token       String   @id @db.VarChar(191)
+  lobbyCode   String   @db.VarChar(8)
+  playerId    String
+  playerName  String   @db.VarChar(64)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lobby       Lobby    @relation(fields: [lobbyCode], references: [code], onDelete: Cascade)
+
+  @@unique([lobbyCode, playerId])
+  @@index([lobbyCode, createdAt])
+}
+
+model LobbyMembership {
+  id                  String             @id @default(cuid())
+  lobbyId             String
+  playerId            String
+  role                MembershipRole     @default(PLAYER)
+  status              MembershipStatus   @default(ACTIVE)
+  joinedAt            DateTime           @default(now())
+  leftAt              DateTime?
+  lastSeenAt          DateTime?
+  sessionTokenHash    String             @unique @db.VarChar(191)
+  sessionTokenPreview String?            @db.VarChar(24)
+  lobby               Lobby              @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  player              Player             @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([lobbyId, playerId])
+  @@index([lobbyId, status])
+  @@index([playerId, status])
+}
+
+model Game {
+  id           String        @id @default(cuid())
+  lobbyId       String
+  status        GameStatus    @default(DRAFT)
+  roundIndex    Int           @default(0)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  lobby         Lobby         @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  rounds        Round[]
+  scoreEvents   ScoreEvent[]
+
+  @@index([lobbyId, createdAt])
+}
+
+model Round {
+  id               String          @id @default(cuid())
+  gameId           String
+  roundNumber      Int
+  archetype        RoundArchetype
+  resolutionType   ResolutionType
+  phase            RoundPhase     @default(SUBMISSION)
+  promptId         String?        @db.VarChar(64)
+  promptCategory   String?        @db.VarChar(128)
+  promptText       String
+  canonicalAnswer  String?
+  votePrompt       String?
+  scoreSummary     Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  revealedAt       DateTime?
+  game             Game           @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  submissions      Submission[]
+  options          RoundOption[]
+  votes            Vote[]
+  scoreEvents      ScoreEvent[]
+
+  @@unique([gameId, roundNumber])
+  @@index([gameId, phase])
+}
+
+model Submission {
+  id         String            @id @default(cuid())
+  roundId    String
+  playerId   String
+  text       String            @db.Text
+  status     SubmissionStatus  @default(DRAFT)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  lockedAt   DateTime?
+  round      Round             @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player     Player            @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  option     RoundOption?
+
+  @@unique([roundId, playerId])
+  @@index([roundId, status])
+}
+
+model RoundOption {
+  id            String       @id @default(cuid())
+  roundId       String
+  submissionId  String?      @unique
+  ownerPlayerId String?
+  text          String       @db.Text
+  isTruth       Boolean      @default(false)
+  displayOrder  Int?
+  createdAt     DateTime     @default(now())
+  round         Round        @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  submission    Submission?  @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  ownerPlayer   Player?      @relation("OptionOwner", fields: [ownerPlayerId], references: [id], onDelete: SetNull)
+  votes         Vote[]
+
+  @@index([roundId, displayOrder])
+  @@index([roundId, ownerPlayerId])
+}
+
+model Vote {
+  id            String       @id @default(cuid())
+  roundId       String
+  voterPlayerId String
+  optionId      String
+  kind          VoteKind     @default(ROUND_OPTION)
+  createdAt     DateTime     @default(now())
+  round         Round        @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  voterPlayer   Player       @relation("VoteCaster", fields: [voterPlayerId], references: [id], onDelete: Cascade)
+  option        RoundOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, voterPlayerId])
+  @@index([roundId, optionId])
+}
+
+model ScoreEvent {
+  id             String          @id @default(cuid())
+  gameId         String
+  roundId        String?
+  playerId       String
+  sourcePlayerId String?
+  type           ScoreEventType
+  points         Int
+  summary        String?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+  game           Game            @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  round          Round?          @relation(fields: [roundId], references: [id], onDelete: SetNull)
+  player         Player          @relation("ScoreRecipient", fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([gameId, createdAt])
+  @@index([playerId, createdAt])
+  @@index([roundId, createdAt])
+}

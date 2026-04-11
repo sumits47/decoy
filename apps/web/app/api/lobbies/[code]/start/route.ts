@@ -7,7 +7,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
   try {
     const { code } = await params;
     const body = (await request.json()) as { playerSessionToken?: string };
-    const lobby = startLobbyGame(code, body.playerSessionToken ?? '');
+    const lobby = await startLobbyGame(code, body.playerSessionToken ?? '');
     return NextResponse.json({ lobby });
   } catch (error) {
     const response = toErrorResponse(error);

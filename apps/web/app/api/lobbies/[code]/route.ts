@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(_: Request, { params }: { params: Promise<{ code: string }> }) {
   try {
     const { code } = await params;
-    const lobby = getLobbySnapshot(code);
+    const lobby = await getLobbySnapshot(code);
     return NextResponse.json({ lobby });
   } catch (error) {
     const response = toErrorResponse(error);
