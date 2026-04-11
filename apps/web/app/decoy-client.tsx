@@ -1,47 +1,86 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import {
-  addPlayer,
-  advanceToNextRound,
-  allSubmissionsComplete,
-  allVotesComplete,
-  applyRoundScore,
-  castVote,
-  createLobby,
-  getPromptDeck,
-  lockSubmissions,
-  scoreRound,
-  startGame,
-  submitAnswer
-} from '@decoy/game-engine';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { allSubmissionsComplete, allVotesComplete, getPromptDeck } from '@decoy/game-engine';
 import type { LobbyState, Player, RoundState } from '@decoy/types';
 import { Surface } from '@decoy/ui';
 
-const STORAGE_KEY = 'decoy.local.lobbies.v1';
+const PLAYER_KEY = 'decoy.player.identity.v1';
+const POLL_MS = 2000;
 
-function loadLobbies(): Record<string, LobbyState> {
+function scoreRows(players: Player[], scores: Record<string, number>) {
+  return [...players].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
+}
+
+function getStoredPlayers(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, LobbyState>) : {};
+    const raw = window.localStorage.getItem(PLAYER_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
   } catch {
     return {};
   }
 }
 
-function saveLobby(lobby: LobbyState) {
-  const lobbies = loadLobbies();
-  lobbies[lobby.code] = lobby;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(lobbies));
+function getStoredPlayerId(code: string) {
+  return getStoredPlayers()[code.toUpperCase()] ?? null;
 }
 
-function getLobby(code: string) {
-  return loadLobbies()[code.toUpperCase()] ?? null;
+function storePlayerId(code: string, playerId: string) {
+  if (typeof window === 'undefined') return;
+  const current = getStoredPlayers();
+  current[code.toUpperCase()] = playerId;
+  window.localStorage.setItem(PLAYER_KEY, JSON.stringify(current));
 }
 
-function scoreRows(players: Player[], scores: Record<string, number>) {
-  return [...players].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(init?.headers ?? {})
+    },
+    cache: 'no-store'
+  });
+
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(data.error ?? 'Request failed.');
+  }
+  return data;
+}
+
+function useLobby(code: string) {
+  const [lobby, setLobby] = useState<LobbyState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await api<{ lobby: LobbyState }>(`/api/lobbies/${code}`);
+      setLobby(data.lobby);
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to load lobby.');
+      setLobby(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [code]);
+
+  useEffect(() => {
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [refresh]);
+
+  return { lobby, loading, error, refresh, setLobby };
+}
+
+function roundTitle(round: RoundState) {
+  return round.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote';
 }
 
 export function LandingClient() {
@@ -56,8 +95,8 @@ export function LandingClient() {
             <span className="badge">Decoy · playable prototype</span>
             <h1 className="h1">Lie well. Guess better.</h1>
             <p className="lead">
-              A local-first vertical slice for the full Decoy loop: create a lobby, add players, run one bluff/trivia round,
-              run one opinion-vote round, reveal scores, then advance.
+              A server-authoritative vertical slice for the Decoy loop: create a lobby, join from separate devices,
+              run a bluff round, run an opinion round, reveal scores, then advance.
             </p>
           </div>
 
@@ -96,8 +135,8 @@ export function LandingClient() {
                 {getPromptDeck().map((prompt) => (
                   <span key={prompt.id} className="pill">{prompt.archetype}</span>
                 ))}
-                <span className="pill">hot-seat multiplayer</span>
-                <span className="pill">localStorage persistence</span>
+                <span className="pill">multi-device lobby</span>
+                <span className="pill">server snapshot polling</span>
               </div>
             </div>
           </Surface>
@@ -109,12 +148,49 @@ export function LandingClient() {
 
 export function CreateLobbyClient({ hostName }: { hostName: string }) {
   const [createdLobbyCode, setCreatedLobbyCode] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    const lobby = createLobby(hostName || 'Host');
-    saveLobby(lobby);
-    setCreatedLobbyCode(lobby.code);
+    let cancelled = false;
+
+    const create = async () => {
+      try {
+        const data = await api<{ lobby: LobbyState; playerId: string }>('/api/lobbies', {
+          method: 'POST',
+          body: JSON.stringify({ hostName })
+        });
+        storePlayerId(data.lobby.code, data.playerId);
+        if (!cancelled) {
+          setCreatedLobbyCode(data.lobby.code);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : 'Unable to create lobby.');
+        }
+      }
+    };
+
+    void create();
+    return () => {
+      cancelled = true;
+    };
   }, [hostName]);
+
+  if (status) {
+    return (
+      <main className="app-shell">
+        <div className="container narrow stack-lg section-pad">
+          <Surface>
+            <div className="panel stack-md">
+              <h1 className="section-title">Couldn’t create lobby</h1>
+              <p className="status-error">{status}</p>
+              <a className="button button-secondary" href="/">Back home</a>
+            </div>
+          </Surface>
+        </div>
+      </main>
+    );
+  }
 
   if (!createdLobbyCode) return null;
 
@@ -125,7 +201,7 @@ export function CreateLobbyClient({ hostName }: { hostName: string }) {
           <div className="panel stack-md">
             <p className="eyebrow">Lobby created</p>
             <h1 className="section-title">Room code {createdLobbyCode}</h1>
-            <p className="muted">Pass the code around, or just keep adding players on the next screen for a hot-seat demo.</p>
+            <p className="muted">Share the code. Everyone can join from their own browser now.</p>
             <div className="actions">
               <a className="button button-primary" href={`/lobby/${createdLobbyCode}`}>Open lobby</a>
               <a className="button button-secondary" href="/">Back home</a>
@@ -141,17 +217,23 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   const [code, setCode] = useState(initialCode.toUpperCase());
   const [name, setName] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
 
-  const join = () => {
-    const lobby = getLobby(code);
-    if (!lobby) {
-      setStatus('No lobby found for that code.');
-      return;
+  const join = async () => {
+    setJoining(true);
+    setStatus(null);
+    try {
+      const data = await api<{ player: Player }>(`/api/lobbies/${code}/join`, {
+        method: 'POST',
+        body: JSON.stringify({ name })
+      });
+      storePlayerId(code, data.player.id);
+      window.location.href = `/lobby/${code.toUpperCase()}`;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Unable to join lobby.');
+    } finally {
+      setJoining(false);
     }
-
-    const next = addPlayer(lobby, name || `Player ${lobby.players.length + 1}`);
-    saveLobby(next);
-    window.location.href = `/lobby/${next.code}`;
   };
 
   return (
@@ -170,7 +252,7 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
             </label>
             {status ? <p className="status-error">{status}</p> : null}
             <div className="actions">
-              <button className="button button-primary" onClick={join}>Join lobby</button>
+              <button className="button button-primary" onClick={join} disabled={joining}>Join lobby</button>
               <a className="button button-secondary" href="/">Back home</a>
             </div>
           </div>
@@ -180,30 +262,57 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   );
 }
 
-function roundTitle(round: RoundState) {
-  return round.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote';
-}
-
 export function LobbyClient({ code }: { code: string }) {
-  const [lobby, setLobby] = useState<LobbyState | null>(null);
-  const [newPlayerName, setNewPlayerName] = useState('');
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [refreshKey, setRefreshKey] = useState(0);
+  const { lobby, loading, error, refresh, setLobby } = useLobby(code.toUpperCase());
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [status, setStatus] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   useEffect(() => {
-    setLobby(getLobby(code));
-  }, [code, refreshKey]);
+    setPlayerId(getStoredPlayerId(code));
+  }, [code]);
 
-  const persistLobby = (nextLobby: LobbyState) => {
-    saveLobby(nextLobby);
-    setLobby(nextLobby);
-  };
-
+  const me = useMemo(() => lobby?.players.find((player) => player.id === playerId) ?? null, [lobby, playerId]);
+  const isHost = Boolean(me && lobby && me.id === lobby.hostPlayerId);
   const currentRound = lobby?.game?.rounds[lobby.game.roundIndex];
   const sortedScores = useMemo(() => {
     if (!lobby?.game) return [];
     return scoreRows(lobby.game.players, lobby.game.scores);
   }, [lobby]);
+
+  useEffect(() => {
+    if (!currentRound || !playerId) return;
+    const existing = currentRound.submissions.find((submission) => submission.playerId === playerId)?.text ?? '';
+    setDraft(existing);
+  }, [currentRound, playerId]);
+
+  const runAction = useCallback(async (action: string, path: string, body: Record<string, string> = {}) => {
+    if (!playerId) {
+      setStatus('Join this lobby from this browser first.');
+      return;
+    }
+
+    setBusyAction(action);
+    setStatus(null);
+    try {
+      const data = await api<{ lobby?: LobbyState }>(path, {
+        method: 'POST',
+        body: JSON.stringify({ ...body, playerId })
+      });
+      if (data.lobby) {
+        setLobby(data.lobby);
+      } else {
+        await refresh();
+      }
+    } catch (nextError) {
+      setStatus(nextError instanceof Error ? nextError.message : 'Action failed.');
+    } finally {
+      setBusyAction(null);
+    }
+  }, [playerId, refresh, setLobby]);
+
+  if (loading) return null;
 
   if (!lobby) {
     return (
@@ -212,10 +321,10 @@ export function LobbyClient({ code }: { code: string }) {
           <Surface>
             <div className="panel stack-md">
               <h1 className="section-title">Lobby not found</h1>
-              <p className="muted">That room code isn’t in local storage on this device.</p>
+              <p className="muted">{error ?? 'That room code does not exist on the server.'}</p>
               <div className="actions">
                 <a className="button button-primary" href="/">Go home</a>
-                <button className="button button-secondary" onClick={() => setRefreshKey((value) => value + 1)}>Retry</button>
+                <button className="button button-secondary" onClick={() => void refresh()}>Retry</button>
               </div>
             </div>
           </Surface>
@@ -224,81 +333,23 @@ export function LobbyClient({ code }: { code: string }) {
     );
   }
 
-  const addLocalPlayer = () => {
-    const next = addPlayer(lobby, newPlayerName || `Player ${lobby.players.length + 1}`);
-    persistLobby(next);
-    setNewPlayerName('');
-  };
-
-  const launchGame = () => {
-    if (lobby.players.length < 3) return;
-    persistLobby(startGame(lobby));
-  };
-
-  const updateDraft = (playerId: string, value: string) => {
-    setDrafts((current) => ({ ...current, [playerId]: value }));
-  };
-
-  const submitForPlayer = (playerId: string) => {
-    const game = lobby.game;
-    if (!game || !currentRound) return;
-    const nextRound = submitAnswer(currentRound, playerId, drafts[playerId] ?? '');
-    const nextGame = {
-      ...game,
-      rounds: game.rounds.map((round, index) => (index === game.roundIndex ? nextRound : round))
-    };
-    persistLobby({ ...lobby, game: nextGame });
-  };
-
-  const moveToVoting = () => {
-    const game = lobby.game;
-    if (!game || !currentRound || !allSubmissionsComplete(currentRound)) return;
-    const nextRound = lockSubmissions(currentRound);
-    const nextGame = {
-      ...game,
-      rounds: game.rounds.map((round, index) => (index === game.roundIndex ? nextRound : round))
-    };
-    persistLobby({ ...lobby, game: nextGame });
-  };
-
-  const voteForPlayer = (playerId: string, optionId: string) => {
-    const game = lobby.game;
-    if (!game || !currentRound) return;
-    const nextRound = castVote(currentRound, playerId, optionId);
-    const nextGame = {
-      ...game,
-      rounds: game.rounds.map((round, index) => (index === game.roundIndex ? nextRound : round))
-    };
-    persistLobby({ ...lobby, game: nextGame });
-  };
-
-  const revealScores = () => {
-    if (!lobby.game || !currentRound || !allVotesComplete(currentRound, lobby.game.players)) return;
-    const scoredRound = scoreRound(currentRound, lobby.game.players);
-    const nextGame = applyRoundScore(lobby.game, scoredRound);
-    persistLobby({ ...lobby, game: nextGame });
-  };
-
-  const nextRound = () => {
-    if (!lobby.game) return;
-    persistLobby({ ...lobby, game: advanceToNextRound(lobby.game) });
-  };
-
-  const resetDemo = () => {
-    persistLobby({ ...lobby, game: undefined });
-    setDrafts({});
-  };
-
   return (
     <main className="app-shell">
       <div className="container section-pad stack-lg">
         <div className="topbar">
-          <div>
-            <span className="badge">Room {lobby.code}</span>
+          <div className="stack-sm">
+            <div className="stack-inline wrap gap-sm">
+              <span className="badge">Room {lobby.code}</span>
+              {me ? <span className="pill">You: {me.name}</span> : <span className="pill">Read-only view</span>}
+              {isHost ? <span className="pill">host controls</span> : null}
+            </div>
             <h1 className="section-title">Decoy lobby</h1>
           </div>
           <a className="button button-secondary" href="/">Home</a>
         </div>
+
+        {status ? <p className="status-error">{status}</p> : null}
+        {error && lobby ? <p className="muted">Refresh issue: {error}</p> : null}
 
         {!lobby.game ? (
           <div className="grid lobby-grid">
@@ -309,15 +360,18 @@ export function LobbyClient({ code }: { code: string }) {
                   {lobby.players.map((player) => (
                     <div key={player.id} className="list-row">
                       <span>{player.name}</span>
-                      {player.isHost ? <span className="pill">host</span> : null}
+                      <div className="stack-inline">
+                        {player.id === playerId ? <span className="pill">you</span> : null}
+                        {player.isHost ? <span className="pill">host</span> : null}
+                      </div>
                     </div>
                   ))}
                 </div>
-                <div className="stack-sm inline-form">
-                  <input value={newPlayerName} onChange={(event) => setNewPlayerName(event.target.value)} placeholder="Add player" />
-                  <button className="button button-secondary" onClick={addLocalPlayer}>Add player</button>
-                </div>
-                <p className="muted">Need at least 3 players. This prototype works great in hot-seat mode on one device.</p>
+                {!me ? (
+                  <p className="muted">This browser has not joined the room yet. Use the join screen with this code to participate.</p>
+                ) : (
+                  <p className="muted">Waiting for the host to start once at least 3 players are in.</p>
+                )}
               </div>
             </Surface>
 
@@ -330,7 +384,11 @@ export function LobbyClient({ code }: { code: string }) {
                   <li>Score reveal</li>
                   <li>Next round / finish</li>
                 </ol>
-                <button className="button button-primary" disabled={lobby.players.length < 3} onClick={launchGame}>
+                <button
+                  className="button button-primary"
+                  disabled={!isHost || lobby.players.length < 3 || busyAction === 'start'}
+                  onClick={() => void runAction('start', `/api/lobbies/${lobby.code}/start`)}
+                >
                   Start game
                 </button>
               </div>
@@ -364,7 +422,13 @@ export function LobbyClient({ code }: { code: string }) {
                     </div>
                   ))}
                 </div>
-                <button className="button button-secondary" onClick={resetDemo}>Reset lobby</button>
+                <button
+                  className="button button-secondary"
+                  disabled={!isHost || busyAction === 'reset'}
+                  onClick={() => void runAction('reset', `/api/lobbies/${lobby.code}/reset`)}
+                >
+                  Reset lobby
+                </button>
               </div>
             </Surface>
 
@@ -372,27 +436,45 @@ export function LobbyClient({ code }: { code: string }) {
               <Surface>
                 <div className="panel stack-md">
                   <p className="eyebrow">Submission phase</p>
-                  <div className="stack-md">
+                  {me ? (
+                    <div className="submission-card stack-sm">
+                      <div className="space-between wrap gap-sm">
+                        <strong>{me.name}</strong>
+                        <span className="pill">{draft.trim() ? 'draft ready' : 'waiting'}</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder={currentRound.archetype === 'bluff_trivia' ? 'Enter a convincing fake answer' : 'Enter your funniest answer'}
+                      />
+                      <button
+                        className="button button-secondary"
+                        disabled={busyAction === 'submit'}
+                        onClick={() => void runAction('submit', `/api/lobbies/${lobby.code}/submit`, { text: draft })}
+                      >
+                        Submit my answer
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="muted">Join this lobby on this browser to submit an answer.</p>
+                  )}
+                  <div className="stack-sm">
                     {lobby.game.players.map((player) => {
-                      const existing = currentRound.submissions.find((submission) => submission.playerId === player.id)?.text ?? '';
+                      const submitted = Boolean(currentRound.submissions.find((submission) => submission.playerId === player.id)?.text.trim());
                       return (
-                        <div key={player.id} className="submission-card stack-sm">
-                          <div className="space-between wrap gap-sm">
-                            <strong>{player.name}</strong>
-                            <span className="pill">{existing ? 'locked in' : 'waiting'}</span>
-                          </div>
-                          <textarea
-                            rows={3}
-                            value={drafts[player.id] ?? existing}
-                            onChange={(event) => updateDraft(player.id, event.target.value)}
-                            placeholder={currentRound.archetype === 'bluff_trivia' ? 'Enter a convincing fake answer' : 'Enter your funniest answer'}
-                          />
-                          <button className="button button-secondary" onClick={() => submitForPlayer(player.id)}>Submit for {player.name}</button>
+                        <div key={player.id} className="list-row">
+                          <span>{player.name}</span>
+                          <span className="pill">{submitted ? 'submitted' : 'waiting'}</span>
                         </div>
                       );
                     })}
                   </div>
-                  <button className="button button-primary" disabled={!allSubmissionsComplete(currentRound)} onClick={moveToVoting}>
+                  <button
+                    className="button button-primary"
+                    disabled={!isHost || !allSubmissionsComplete(currentRound) || busyAction === 'open-voting'}
+                    onClick={() => void runAction('open-voting', `/api/lobbies/${lobby.code}/open-voting`)}
+                  >
                     Lock answers and open voting
                   </button>
                 </div>
@@ -403,39 +485,48 @@ export function LobbyClient({ code }: { code: string }) {
               <Surface>
                 <div className="panel stack-md">
                   <p className="eyebrow">Voting phase</p>
-                  <div className="stack-md">
-                    {lobby.game.players.map((player) => {
-                      const ownOptionId = currentRound.archetype === 'opinion_vote'
-                        ? currentRound.options.find((option) => option.ownerPlayerId === player.id)?.id
-                        : null;
-
-                      return (
-                        <div key={player.id} className="submission-card stack-sm">
-                          <div className="space-between wrap gap-sm">
-                            <strong>{player.name}</strong>
-                            <span className="pill">{currentRound.votes[player.id] ? 'voted' : 'choose one'}</span>
-                          </div>
-                          <div className="stack-xs">
-                            {currentRound.options.map((option) => {
-                              const disabled = currentRound.archetype === 'opinion_vote' && ownOptionId === option.id;
-                              return (
-                                <button
-                                  key={option.id}
-                                  className={`vote-option ${currentRound.votes[player.id] === option.id ? 'vote-option-active' : ''}`}
-                                  onClick={() => voteForPlayer(player.id, option.id)}
-                                  disabled={disabled}
-                                >
-                                  {option.text}
-                                  {disabled ? <span className="vote-tag">your answer</span> : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  {me ? (
+                    <div className="submission-card stack-sm">
+                      <div className="space-between wrap gap-sm">
+                        <strong>{me.name}</strong>
+                        <span className="pill">{currentRound.votes[me.id] ? 'voted' : 'choose one'}</span>
+                      </div>
+                      <div className="stack-xs">
+                        {currentRound.options.map((option) => {
+                          const ownOptionId = currentRound.archetype === 'opinion_vote'
+                            ? currentRound.options.find((candidate) => candidate.ownerPlayerId === me.id)?.id
+                            : null;
+                          const disabled = currentRound.archetype === 'opinion_vote' && ownOptionId === option.id;
+                          return (
+                            <button
+                              key={option.id}
+                              className={`vote-option ${currentRound.votes[me.id] === option.id ? 'vote-option-active' : ''}`}
+                              onClick={() => void runAction('vote', `/api/lobbies/${lobby.code}/vote`, { optionId: option.id })}
+                              disabled={disabled || busyAction === 'vote'}
+                            >
+                              {option.text}
+                              {disabled ? <span className="vote-tag">your answer</span> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="muted">Join this lobby on this browser to vote.</p>
+                  )}
+                  <div className="stack-sm">
+                    {lobby.game.players.map((player) => (
+                      <div key={player.id} className="list-row">
+                        <span>{player.name}</span>
+                        <span className="pill">{currentRound.votes[player.id] ? 'voted' : 'waiting'}</span>
+                      </div>
+                    ))}
                   </div>
-                  <button className="button button-primary" disabled={!allVotesComplete(currentRound, lobby.game.players)} onClick={revealScores}>
+                  <button
+                    className="button button-primary"
+                    disabled={!isHost || !allVotesComplete(currentRound, lobby.game.players) || busyAction === 'reveal'}
+                    onClick={() => void runAction('reveal', `/api/lobbies/${lobby.code}/reveal`)}
+                  >
                     Reveal round results
                   </button>
                 </div>
@@ -470,10 +561,22 @@ export function LobbyClient({ code }: { code: string }) {
                   {lobby.game.phase === 'finished' ? (
                     <div className="actions">
                       <span className="pill">Match complete</span>
-                      <button className="button button-primary" onClick={resetDemo}>Play again</button>
+                      <button
+                        className="button button-primary"
+                        disabled={!isHost || busyAction === 'reset'}
+                        onClick={() => void runAction('reset', `/api/lobbies/${lobby.code}/reset`)}
+                      >
+                        Play again
+                      </button>
                     </div>
                   ) : (
-                    <button className="button button-primary" onClick={nextRound}>Next round</button>
+                    <button
+                      className="button button-primary"
+                      disabled={!isHost || busyAction === 'next-round'}
+                      onClick={() => void runAction('next-round', `/api/lobbies/${lobby.code}/next-round`)}
+                    >
+                      Next round
+                    </button>
                   )}
                 </div>
               </Surface>
