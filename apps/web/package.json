@@ -13,6 +13,9 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@decoy/game-engine": "workspace:*",
+    "@decoy/types": "workspace:*",
+    "@decoy/ui": "workspace:*",
     "next": "^15.3.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
