@@ -22,24 +22,25 @@ The long-term product direction is:
 
 ### Core MVP player journey
 1. Player lands on Decoy homepage
-2. Player creates a lobby or joins with a room code/link
+2. Player creates a lobby or joins a lobby via room code/link
 3. Players enter display names
 4. Host starts a game
-5. Game runs through multiple rounds:
-   - prompt presented
-   - players submit fake answers
-   - players vote on which answer is real
-   - round results shown
-   - cumulative scores updated
-6. Game ends with leaderboard and replay option
+5. Game runs through multiple rounds, where each round can be one of several archetypes:
+   - a bluff/trivia round with one real answer and many decoys
+   - a subjective/funniest-answer round with no single correct answer
+   - a judge-pick round where one player chooses the best answer
+6. Round results are shown and cumulative scores updated
+7. Game ends with leaderboard and replay option
 
 ### MVP features
 - Lobby creation with short room codes
 - Join by code/link
 - Host controls (start game, next round, kick inactive player if needed)
 - Timed rounds
-- Prompt deck for at least one polished mode
-- Fake-answer submission
+- Prompt deck for at least **two polished round archetypes**:
+  - bluff/trivia mode
+  - subjective vote or judge-pick mode
+- Answer submission flow
 - Voting/reveal/scoring
 - Scoreboard
 - Basic reconnect handling
@@ -86,7 +87,7 @@ packages/
 #### `packages/game-engine`
 - shared game rules
 - round state transitions
-- scoring rules
+- per-mode scoring rules
 - prompt/result evaluation contracts
 - deterministic reducer/state machine logic where possible
 
@@ -161,6 +162,7 @@ If velocity becomes a problem later, adopt:
 - `Prompt`
 - `SubmittedAnswer`
 - `Vote`
+- `Judgement`
 - `ScoreEvent`
 - `PlayerPresence`
 
@@ -247,22 +249,52 @@ Use a **server-authoritative realtime model**.
 ### Recommended setup
 - Next.js app on Vercel for product UI and standard APIs
 - managed realtime provider for live game channels/events
-- server owns phase transitions, timers, scoring, and reveal logic
+- server owns phase transitions, timers, scoring, reveal logic, and judge resolution
 - clients are dumb renderers + input senders
 
 ### Why this matters
-A bluffing game is vulnerable to:
+A party bluffing game is vulnerable to:
 - race conditions
 - duplicate submissions
 - client-side tampering
 - vote leaks
 - timer abuse
+- judge-selection abuse if not validated correctly
 
 Server authority keeps gameplay fair.
 
 ---
 
 ## 8. Gameplay system design
+
+## Core correction: not every round has a correct answer
+Decoy should **not** assume every prompt has a `canonicalAnswer`.
+
+Instead, the engine should support **multiple round archetypes** and **multiple resolution types**.
+
+## Recommended modeling approach
+
+### Round archetype
+Represents the kind of player experience:
+- `bluff_trivia`
+- `opinion_vote`
+- `judge_pick`
+- `personal_truth`
+- `personal_opinion`
+
+### Resolution type
+Represents how the winner is determined:
+- `correct_answer`
+- `audience_vote`
+- `judge_pick`
+- `hybrid`
+
+This distinction matters because two prompts might look similar at the UI level but resolve differently.
+
+For example:
+- a trivia bluff round uses `correct_answer`
+- a funniest-caption round uses `audience_vote`
+- a Cards Against Humanity style round uses `judge_pick`
 
 ## High-level phase model
 Model the game as a strict state machine.
@@ -273,13 +305,23 @@ Model the game as a strict state machine.
 - `starting`
 
 ### Round phases
+A generic model:
 - `prompt`
 - `submission`
 - `submission_locked`
+- `evaluation_setup`
 - `voting`
+- `judging`
 - `reveal`
 - `score`
 - `complete`
+
+Not every round uses every phase.
+
+Examples:
+- `bluff_trivia`: prompt → submission → evaluation_setup → voting → reveal → score
+- `opinion_vote`: prompt → submission → evaluation_setup → voting → reveal → score
+- `judge_pick`: prompt → submission → judging → reveal → score
 
 ### Match phases
 - `lobby`
@@ -291,37 +333,106 @@ Model the game as a strict state machine.
 1. Create lobby
 2. Add players
 3. Host starts match
-4. Server selects prompt
+4. Server selects prompt and round archetype
 5. Server opens submission window with deadline
 6. Players submit answers
 7. Server closes submissions
-8. Server shuffles real answer + decoys
-9. Server opens voting window
-10. Players vote
+8. Server prepares evaluation payload based on `resolutionType`
+9. Server opens voting or judging window
+10. Votes/judgements are collected
 11. Server computes scoring
 12. Server emits reveal payload
 13. Server updates cumulative scores
 14. Repeat until final round complete
 
+## Round archetypes in detail
+
+### A. Bluff trivia round
+**Example:** “Real answer + decoys”
+
+- Prompt has one correct answer
+- Players submit fake answers
+- Server injects the correct answer into the answer set
+- Players vote for what they think is real
+- Score comes from:
+  - choosing the correct answer
+  - fooling others into choosing your fake answer
+
+### B. Opinion / funniest-answer round
+**Example:** “What’s the funniest answer to this prompt?”
+
+- Prompt has **no correct answer**
+- Players submit original answers
+- Server presents answers anonymously
+- Players vote for funniest/best answer
+- Score comes from:
+  - votes received
+  - optional placement bonus
+- Typically disallow voting for your own answer
+
+### C. Judge-pick round
+**Example:** Cards Against Humanity style round
+
+- Prompt has **no correct answer**
+- Players submit answers
+- One player (rotating judge, host, or prompt owner) picks the winner
+- Score comes from:
+  - being chosen by the judge
+- Other players may not vote at all in this mode
+
+### D. Personal truth round
+**Example:** question about a specific player
+
+Two possible sub-modes:
+1. **guess the real answer**
+   - target player provides true answer
+   - others submit decoys
+   - group guesses the true one
+2. **best answer wins**
+   - everyone submits an answer to a social prompt
+   - audience or judge selects winner
+
+The engine should support both rather than collapse them into one assumption.
+
 ## Scoring system
-Initial MVP scoring can be simple and readable:
-- player gets points for choosing real answer
-- player gets points per opponent fooled by their decoy
-- optional bonus for unanimous fooling or fastest correct vote (later, not MVP)
+Scoring must be mode-specific.
+
+### `correct_answer` scoring
+- points for choosing correct answer
+- points for each player fooled by your decoy
+- optional bonus for zeroing in quickly or fooling multiple players
+
+### `audience_vote` scoring
+- points based on number of votes your answer receives
+- optional rank-based bonuses:
+  - first place
+  - second place
+- optional participation / tie handling rules
+
+### `judge_pick` scoring
+- winner gets fixed round points
+- optional bonus for judge diversity / rotating judge incentives
 
 ## Prompt system
-Store prompts with metadata:
+Store prompts with metadata appropriate to multiple modes:
 - `id`
 - `text`
-- `canonicalAnswer`
+- `archetype`
+- `resolutionType`
 - `category`
-- `difficulty`
+- `difficulty` (only meaningful for some modes)
+- `canonicalAnswer` (nullable; only present for correct-answer rounds)
+- `targetPlayerRule` (nullable; used for personal rounds)
 - `locale`
 - `status` (draft/active/retired)
 - moderation metadata if UGC arrives later
 
+### Important schema guidance
+`canonicalAnswer` must be **nullable**.
+Do not model it as mandatory at the domain level.
+
 ### Recommendation
-Start with curated prompts only.
+Start with curated prompts only, but ensure the prompt model already supports multiple round archetypes.
 
 ---
 
@@ -340,11 +451,21 @@ Start with curated prompts only.
 - countdown timers
 - answer submitted events (without leaking answer contents unnecessarily)
 - vote received acknowledgements
+- judge decision acknowledgements
 - reveal payloads
 - scoreboard updates
 
 ### Shared domain contracts
 Put these in `packages/types` and `packages/game-engine`.
+
+### Recommended shared contracts
+- `RoundDefinition`
+- `PromptDefinition`
+- `RoundArchetype`
+- `ResolutionType`
+- `RoundState`
+- `SubmissionRuleSet`
+- `ScoringRuleSet`
 
 ---
 
@@ -408,11 +529,11 @@ Keep shared logic in packages from day 1:
 
 ## Unit tests
 Target first:
-- scoring rules
-- state transitions
+- scoring rules by resolution type
+- state transitions by round archetype
 - prompt selection rules
 - answer shuffling / reveal behavior
-- anti-duplication rules for submissions/votes
+- anti-duplication rules for submissions/votes/judge picks
 
 Best home: `packages/game-engine`
 
@@ -421,12 +542,14 @@ Target:
 - lobby create/join/start flows
 - reconnect flow
 - end-to-end round lifecycle against test backend/realtime mocks
+- one test per primary round archetype
 
 ## End-to-end tests
 Use Playwright for:
 - create room
 - join from second browser context
-- play through one round
+- play through one bluff-trivia round
+- play through one opinion/judge round
 - verify reveal and scoreboard
 
 ## Load / reliability checks
@@ -435,6 +558,8 @@ Before launch, simulate:
 - reconnect storms
 - stale host disconnect
 - timer expiration with slow clients
+- tie-heavy vote rounds
+- judge disconnect during decision phase
 
 ---
 
@@ -448,7 +573,8 @@ Party games look simple but have real abuse vectors.
 - spam room creation
 - automated joins/bots
 - answer leakage via manipulated clients
-- tampering with timers/submissions/votes
+- tampering with timers/submissions/votes/judge picks
+- collusion in audience-vote modes
 
 ## MVP safeguards
 - server-authoritative game logic
@@ -458,6 +584,7 @@ Party games look simple but have real abuse vectors.
 - signed player session tokens
 - anti-replay protections on critical actions
 - audit logs for suspicious room events
+- explicit round-specific validation rules
 
 ## Privacy considerations
 - collect minimal PII initially
@@ -474,7 +601,7 @@ From early on, track:
 - lobby join success rate
 - lobby abandonment before game start
 - average players per lobby
-- round completion rate
+- round completion rate by archetype
 - match completion rate
 - reconnect frequency
 - average session duration
@@ -484,12 +611,15 @@ From early on, track:
 - game completion rate
 - rematch rate
 - day-1 / day-7 return rates
+- mode preference by archetype
+- drop-off between bluff rounds vs subjective rounds
 
 ### Technical metrics to watch
 - join latency
 - realtime event fanout latency
 - dropped connection rate
 - duplicate submission/vote incidents
+- judge timeout frequency
 
 ---
 
@@ -507,12 +637,14 @@ From early on, track:
 - curated prompts
 - scoring + reveal
 - basic responsive UI
+- support for **at least two round archetypes**
 
 ## Phase 2 — Realtime MVP
 - managed realtime integration
 - reconnect handling
 - server-authoritative timers
 - host controls
+- archetype-aware state transitions
 
 ## Phase 3 — Productionization
 - Postgres + Prisma
@@ -526,6 +658,7 @@ From early on, track:
 - content operations pipeline
 - lightweight accounts
 - social sharing/invites
+- richer deck configuration
 
 ## Phase 5 — Native expansion
 - mobile app(s)
@@ -537,15 +670,22 @@ From early on, track:
 
 1. Install dependencies with `pnpm install`
 2. Run the web shell locally
-3. Pick a realtime provider and prototype a single authoritative room lifecycle
-4. Implement `Lobby`, `GameSession`, and `Round` contracts in `packages/types`
-5. Build a deterministic round reducer in `packages/game-engine`
-6. Add a minimal persistence layer plan for Postgres + Prisma
-7. Create a clickable vertical slice:
+3. Update `packages/types` to define:
+   - `RoundArchetype`
+   - `ResolutionType`
+   - `PromptDefinition`
+   - `RoundDefinition`
+4. Build a deterministic round reducer in `packages/game-engine`
+5. Prototype **two vertical slices**:
+   - one bluff-trivia round
+   - one audience-vote or judge-pick round
+6. Pick a realtime provider and prototype a single authoritative room lifecycle
+7. Add a minimal persistence layer plan for Postgres + Prisma
+8. Create a clickable vertical slice:
    - homepage
    - create lobby
    - join lobby
-   - one playable round
+   - playable rounds across at least two archetypes
 
 ---
 
@@ -558,6 +698,6 @@ If the goal is to ship Decoy quickly and correctly:
 - **Server-authoritative realtime multiplayer** is the right gameplay architecture
 - **Monorepo with shared game-engine/types** is the right long-term structure for eventual native clients
 
-The strongest technical principle for Decoy is simple:
+The strongest technical principle for Decoy is:
 
-> Treat the game as a server-authoritative state machine, and treat every client as a fast, delightful interface on top of that truth.
+> Treat the game as a server-authoritative state machine, and model rounds as explicit archetypes with explicit resolution rules rather than assuming every prompt has one correct answer.
