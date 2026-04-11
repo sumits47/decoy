@@ -1,7 +1,10 @@
 {
   "name": "decoy",
   "private": true,
-  "packageManager": "pnpm@10.30.3",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
