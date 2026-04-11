@@ -190,6 +190,12 @@ export function allVotesComplete(round: RoundState, players: Player[]): boolean 
 export function scoreRound(round: RoundState, players: Player[]): RoundState {
   if (round.phase !== 'voting') return round;
 
+  const validVotes = Object.entries(round.votes).filter(([voterId, optionId]) => {
+    const option = round.options.find((candidate) => candidate.id === optionId);
+    if (!option) return false;
+    return option.ownerPlayerId !== voterId;
+  });
+
   if (round.archetype === 'bluff_trivia') {
     const truth = round.options.find((option) => option.kind === 'truth');
     if (!truth) return round;
@@ -197,10 +203,10 @@ export function scoreRound(round: RoundState, players: Player[]): RoundState {
     const scoreDelta: Record<PlayerId, number> = Object.fromEntries(players.map((player) => [player.id, 0]));
     const summary: string[] = [];
 
-    players.forEach((player) => {
-      const votedOptionId = round.votes[player.id];
-      const votedOption = round.options.find((option) => option.id === votedOptionId);
-      if (!votedOption) return;
+    validVotes.forEach(([voterId, optionId]) => {
+      const player = players.find((candidate) => candidate.id === voterId);
+      const votedOption = round.options.find((option) => option.id === optionId);
+      if (!player || !votedOption) return;
 
       if (votedOption.kind === 'truth') {
         scoreDelta[player.id] += 1000;
@@ -218,17 +224,16 @@ export function scoreRound(round: RoundState, players: Player[]): RoundState {
   const scoreDelta: Record<PlayerId, number> = Object.fromEntries(players.map((player) => [player.id, 0]));
   const summary: string[] = [];
 
-  Object.entries(round.votes).forEach(([voterId, optionId]) => {
+  validVotes.forEach(([, optionId]) => {
     const option = round.options.find((candidate) => candidate.id === optionId);
     if (!option) return;
-    if (option.ownerPlayerId === voterId) return;
     scoreDelta[option.ownerPlayerId] += 700;
   });
 
   round.options
     .map((option) => ({
       option,
-      votes: Object.values(round.votes).filter((vote) => vote === option.id).length
+      votes: validVotes.filter(([, vote]) => vote === option.id).length
     }))
     .sort((left, right) => right.votes - left.votes)
     .forEach(({ option, votes }, index) => {

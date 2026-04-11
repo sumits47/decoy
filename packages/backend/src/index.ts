@@ -214,9 +214,9 @@ export function submitLobbyVote(code: string, actorSessionToken: PlayerSessionTo
   if (round.phase !== 'voting') throw new LobbyError(409, 'Voting is not open.');
   if (!round.options.some((option) => option.id === optionId)) throw new LobbyError(400, 'Invalid option.');
 
-  if (round.archetype === 'opinion_vote') {
-    const ownOption = round.options.find((option) => option.ownerPlayerId === actor.id);
-    if (ownOption?.id === optionId) throw new LobbyError(400, 'No self-votes.');
+  const selectedOption = round.options.find((option) => option.id === optionId);
+  if (selectedOption?.ownerPlayerId === actor.id) {
+    throw new LobbyError(400, 'No self-votes.');
   }
 
   const votedRound = castVoteOnRound(round, actor.id, optionId);
