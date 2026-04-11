@@ -1,5 +1,6 @@
 export type PlayerId = string;
 export type LobbyCode = string;
+export type PlayerSessionToken = string;
 
 export type RoundArchetype = 'bluff_trivia' | 'opinion_vote';
 export type ResolutionType = 'correct_answer' | 'audience_vote';
@@ -88,4 +89,11 @@ export interface GameSession {
 export interface LobbyState extends LobbySummary {
   players: Player[];
   game?: GameSession;
+}
+
+export interface LobbyMembership {
+  code: LobbyCode;
+  playerId: PlayerId;
+  playerName: string;
+  playerSessionToken: PlayerSessionToken;
 }

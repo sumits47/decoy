@@ -6,8 +6,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request, context: { params: Promise<{ code: string }> }) {
   try {
     const { code } = await context.params;
-    const body = (await request.json()) as { playerId?: string };
-    return NextResponse.json({ lobby: advanceLobbyRound(code, body.playerId ?? '') });
+    const body = (await request.json()) as { playerSessionToken?: string };
+    return NextResponse.json({ lobby: advanceLobbyRound(code, body.playerSessionToken ?? '') });
   } catch (error) {
     const response = toErrorResponse(error);
     return NextResponse.json(response.body, { status: response.status });

@@ -2,34 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { allSubmissionsComplete, allVotesComplete, getPromptDeck } from '@decoy/game-engine';
-import type { LobbyState, Player, RoundState } from '@decoy/types';
+import type { LobbyMembership, LobbyState, Player, RoundState } from '@decoy/types';
 import { Surface } from '@decoy/ui';
 
-const PLAYER_KEY = 'decoy.player.identity.v1';
+const PLAYER_KEY = 'decoy.player.identity.v2';
 const POLL_MS = 2000;
 
 function scoreRows(players: Player[], scores: Record<string, number>) {
   return [...players].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
 }
 
-function getStoredPlayers(): Record<string, string> {
+function getStoredMemberships(): Record<string, LobbyMembership> {
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(PLAYER_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    return raw ? (JSON.parse(raw) as Record<string, LobbyMembership>) : {};
   } catch {
     return {};
   }
 }
 
-function getStoredPlayerId(code: string) {
-  return getStoredPlayers()[code.toUpperCase()] ?? null;
+function getStoredMembership(code: string) {
+  return getStoredMemberships()[code.toUpperCase()] ?? null;
 }
 
-function storePlayerId(code: string, playerId: string) {
+function storeMembership(membership: LobbyMembership) {
   if (typeof window === 'undefined') return;
-  const current = getStoredPlayers();
-  current[code.toUpperCase()] = playerId;
+  const current = getStoredMemberships();
+  current[membership.code.toUpperCase()] = {
+    ...membership,
+    code: membership.code.toUpperCase()
+  };
   window.localStorage.setItem(PLAYER_KEY, JSON.stringify(current));
 }
 
@@ -155,11 +158,11 @@ export function CreateLobbyClient({ hostName }: { hostName: string }) {
 
     const create = async () => {
       try {
-        const data = await api<{ lobby: LobbyState; playerId: string }>('/api/lobbies', {
+        const data = await api<{ lobby: LobbyState; player: Player; membership: LobbyMembership }>('/api/lobbies', {
           method: 'POST',
           body: JSON.stringify({ hostName })
         });
-        storePlayerId(data.lobby.code, data.playerId);
+        storeMembership(data.membership);
         if (!cancelled) {
           setCreatedLobbyCode(data.lobby.code);
         }
@@ -216,6 +219,13 @@ export function CreateLobbyClient({ hostName }: { hostName: string }) {
 export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   const [code, setCode] = useState(initialCode.toUpperCase());
   const [name, setName] = useState('');
+  const membership = useMemo(() => getStoredMembership(code), [code]);
+
+  useEffect(() => {
+    if (membership?.playerName) {
+      setName((current) => current || membership.playerName);
+    }
+  }, [membership]);
   const [status, setStatus] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
 
@@ -223,11 +233,11 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
     setJoining(true);
     setStatus(null);
     try {
-      const data = await api<{ player: Player }>(`/api/lobbies/${code}/join`, {
+      const data = await api<{ player: Player; membership: LobbyMembership }>(`/api/lobbies/${code}/join`, {
         method: 'POST',
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, playerSessionToken: membership?.playerSessionToken })
       });
-      storePlayerId(code, data.player.id);
+      storeMembership(data.membership);
       window.location.href = `/lobby/${code.toUpperCase()}`;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Unable to join lobby.');
@@ -248,8 +258,13 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
             </label>
             <label className="stack-xs">
               <span>Your name</span>
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Riya" />
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={membership?.playerName ?? 'Riya'}
+              />
             </label>
+            {membership ? <p className="muted">This browser will resume its existing seat for room {code || '----'}.</p> : null}
             {status ? <p className="status-error">{status}</p> : null}
             <div className="actions">
               <button className="button button-primary" onClick={join} disabled={joining}>Join lobby</button>
@@ -264,15 +279,16 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
 
 export function LobbyClient({ code }: { code: string }) {
   const { lobby, loading, error, refresh, setLobby } = useLobby(code.toUpperCase());
-  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [membership, setMembership] = useState<LobbyMembership | null>(null);
   const [draft, setDraft] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   useEffect(() => {
-    setPlayerId(getStoredPlayerId(code));
+    setMembership(getStoredMembership(code));
   }, [code]);
 
+  const playerId = membership?.playerId ?? null;
   const me = useMemo(() => lobby?.players.find((player) => player.id === playerId) ?? null, [lobby, playerId]);
   const isHost = Boolean(me && lobby && me.id === lobby.hostPlayerId);
   const currentRound = lobby?.game?.rounds[lobby.game.roundIndex];
@@ -288,7 +304,7 @@ export function LobbyClient({ code }: { code: string }) {
   }, [currentRound, playerId]);
 
   const runAction = useCallback(async (action: string, path: string, body: Record<string, string> = {}) => {
-    if (!playerId) {
+    if (!membership?.playerSessionToken) {
       setStatus('Join this lobby from this browser first.');
       return;
     }
@@ -298,7 +314,7 @@ export function LobbyClient({ code }: { code: string }) {
     try {
       const data = await api<{ lobby?: LobbyState }>(path, {
         method: 'POST',
-        body: JSON.stringify({ ...body, playerId })
+        body: JSON.stringify({ ...body, playerSessionToken: membership.playerSessionToken })
       });
       if (data.lobby) {
         setLobby(data.lobby);
@@ -310,7 +326,7 @@ export function LobbyClient({ code }: { code: string }) {
     } finally {
       setBusyAction(null);
     }
-  }, [playerId, refresh, setLobby]);
+  }, [membership, refresh, setLobby]);
 
   if (loading) return null;
 
