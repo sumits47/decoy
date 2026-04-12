@@ -293,16 +293,22 @@ export function LobbyClient({ code }: { code: string }) {
   const me = useMemo(() => lobby?.players.find((player) => player.id === playerId) ?? null, [lobby, playerId]);
   const isHost = Boolean(me && lobby && me.id === lobby.hostPlayerId);
   const currentRound = lobby?.game?.rounds[lobby.game.roundIndex];
+  const draftRoundKey = useMemo(() => {
+    if (!lobby?.game || !currentRound || !playerId) return null;
+    return `${lobby.game.id}:${lobby.game.roundIndex}:${currentRound.phase}:${playerId}`;
+  }, [currentRound, lobby?.game, playerId]);
+  const existingSubmission = useMemo(() => {
+    if (!currentRound || !playerId) return '';
+    return currentRound.submissions.find((submission) => submission.playerId === playerId)?.text ?? '';
+  }, [currentRound, playerId]);
   const sortedScores = useMemo(() => {
     if (!lobby?.game) return [];
     return scoreRows(lobby.game.players, lobby.game.scores);
   }, [lobby]);
 
   useEffect(() => {
-    if (!currentRound || !playerId) return;
-    const existing = currentRound.submissions.find((submission) => submission.playerId === playerId)?.text ?? '';
-    setDraft(existing);
-  }, [currentRound, playerId]);
+    setDraft(existingSubmission);
+  }, [draftRoundKey, existingSubmission]);
 
   const runAction = useCallback(async (action: string, path: string, body: Record<string, string> = {}) => {
     if (!membership?.playerSessionToken) {
