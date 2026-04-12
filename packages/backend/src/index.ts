@@ -196,6 +196,9 @@ export async function submitLobbyAnswer(code: string, actorSessionToken: PlayerS
   const actor = await requireSessionPlayer(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (round.phase !== 'submission') throw new LobbyError(409, 'Submission phase is over.');
+  if (round.submissions.some((submission) => submission.playerId === actor.id && submission.text.trim().length > 0)) {
+    throw new LobbyError(409, 'Answer already submitted.');
+  }
 
   const submitted = submitRoundAnswer(round, actor.id, text);
   const nextRound = allSubmissionsComplete(submitted) ? lockSubmissions(submitted) : submitted;
@@ -219,6 +222,7 @@ export async function submitLobbyVote(code: string, actorSessionToken: PlayerSes
   const actor = await requireSessionPlayer(lobby, actorSessionToken);
   const round = currentRound(lobby);
   if (round.phase !== 'voting') throw new LobbyError(409, 'Voting is not open.');
+  if (round.votes[actor.id]) throw new LobbyError(409, 'Vote already submitted.');
   if (!round.options.some((option) => option.id === optionId)) throw new LobbyError(400, 'Invalid option.');
 
   const selectedOption = round.options.find((option) => option.id === optionId);

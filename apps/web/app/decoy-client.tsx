@@ -284,6 +284,8 @@ export function LobbyClient({ code }: { code: string }) {
   const [draft, setDraft] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [optimisticSubmission, setOptimisticSubmission] = useState<{ key: string; text: string } | null>(null);
+  const [optimisticVote, setOptimisticVote] = useState<{ key: string; optionId: string } | null>(null);
 
   useEffect(() => {
     setMembership(getStoredMembership(code));
@@ -305,6 +307,21 @@ export function LobbyClient({ code }: { code: string }) {
     if (!lobby?.game) return [];
     return scoreRows(lobby.game.players, lobby.game.scores);
   }, [lobby]);
+  const submissionKey = useMemo(() => {
+    if (!lobby?.game || !currentRound || !playerId || currentRound.phase !== 'submission') return null;
+    return `${lobby.game.id}:${lobby.game.roundIndex}:submission:${playerId}`;
+  }, [currentRound, lobby?.game, playerId]);
+  const effectiveSubmittedText = submissionKey && optimisticSubmission?.key === submissionKey
+    ? optimisticSubmission.text
+    : existingSubmission;
+  const hasSubmittedAnswer = Boolean(effectiveSubmittedText.trim());
+  const votingKey = useMemo(() => {
+    if (!lobby?.game || !currentRound || !playerId || currentRound.phase !== 'voting') return null;
+    return `${lobby.game.id}:${lobby.game.roundIndex}:voting:${playerId}`;
+  }, [currentRound, lobby?.game, playerId]);
+  const effectiveVoteOptionId = votingKey && optimisticVote?.key === votingKey
+    ? optimisticVote.optionId
+    : (playerId ? currentRound?.votes[playerId] ?? null : null);
 
   useEffect(() => {
     setDraft(existingSubmission);
@@ -313,7 +330,7 @@ export function LobbyClient({ code }: { code: string }) {
   const runAction = useCallback(async (action: string, path: string, body: Record<string, string> = {}) => {
     if (!membership?.playerSessionToken) {
       setStatus('Join this lobby from this browser first.');
-      return;
+      return false;
     }
 
     setBusyAction(action);
@@ -328,12 +345,42 @@ export function LobbyClient({ code }: { code: string }) {
       } else {
         await refresh();
       }
+      return true;
     } catch (nextError) {
       setStatus(nextError instanceof Error ? nextError.message : 'Action failed.');
+      return false;
     } finally {
       setBusyAction(null);
     }
   }, [membership, refresh, setLobby]);
+
+  const submitCurrentAnswer = useCallback(async () => {
+    if (!lobby || !submissionKey) return;
+
+    const text = draft.trim();
+    if (!text) {
+      setStatus('Enter an answer first.');
+      return;
+    }
+
+    setOptimisticSubmission({ key: submissionKey, text });
+    const succeeded = await runAction('submit', `/api/lobbies/${lobby.code}/submit`, { text });
+    if (!succeeded) {
+      setOptimisticSubmission((current) => (current?.key === submissionKey ? null : current));
+    }
+  }, [draft, lobby, runAction, submissionKey]);
+
+  const submitVoteChoice = useCallback(async (optionId: string) => {
+    if (!lobby || !votingKey) return;
+
+    setOptimisticVote({ key: votingKey, optionId });
+    const succeeded = await runAction('vote', `/api/lobbies/${lobby.code}/vote`, { optionId });
+    if (!succeeded) {
+      setOptimisticVote((current) => (
+        current?.key === votingKey && current.optionId === optionId ? null : current
+      ));
+    }
+  }, [lobby, runAction, votingKey]);
 
   if (loading) return null;
 
@@ -463,21 +510,30 @@ export function LobbyClient({ code }: { code: string }) {
                     <div className="submission-card stack-sm">
                       <div className="space-between wrap gap-sm">
                         <strong>{me.name}</strong>
-                        <span className="pill">{draft.trim() ? 'draft ready' : 'waiting'}</span>
+                        <span className="pill">{hasSubmittedAnswer ? 'submitted' : draft.trim() ? 'draft ready' : 'waiting'}</span>
                       </div>
-                      <textarea
-                        rows={3}
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder={currentRound.archetype === 'bluff_trivia' ? 'Enter a convincing fake answer' : 'Enter your funniest answer'}
-                      />
-                      <button
-                        className="button button-secondary"
-                        disabled={busyAction === 'submit'}
-                        onClick={() => void runAction('submit', `/api/lobbies/${lobby.code}/submit`, { text: draft })}
-                      >
-                        Submit my answer
-                      </button>
+                      {hasSubmittedAnswer ? (
+                        <>
+                          <p className="muted">Your answer is locked in.</p>
+                          <div className="muted-card">{effectiveSubmittedText}</div>
+                        </>
+                      ) : (
+                        <>
+                          <textarea
+                            rows={3}
+                            value={draft}
+                            onChange={(event) => setDraft(event.target.value)}
+                            placeholder={currentRound.archetype === 'bluff_trivia' ? 'Enter a convincing fake answer' : 'Enter your funniest answer'}
+                          />
+                          <button
+                            className="button button-secondary"
+                            disabled={busyAction === 'submit'}
+                            onClick={() => void submitCurrentAnswer()}
+                          >
+                            Submit my answer
+                          </button>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <p className="muted">Join this lobby on this browser to submit an answer.</p>
@@ -512,23 +568,21 @@ export function LobbyClient({ code }: { code: string }) {
                     <div className="submission-card stack-sm">
                       <div className="space-between wrap gap-sm">
                         <strong>{me.name}</strong>
-                        <span className="pill">{currentRound.votes[me.id] ? 'voted' : 'choose one'}</span>
+                        <span className="pill">{effectiveVoteOptionId ? 'voted' : 'choose one'}</span>
                       </div>
+                      {effectiveVoteOptionId ? <p className="muted">Your vote is locked in.</p> : null}
                       <div className="stack-xs">
                         {currentRound.options.map((option) => {
-                          const ownOptionId = currentRound.archetype === 'opinion_vote'
-                            ? currentRound.options.find((candidate) => candidate.ownerPlayerId === me.id)?.id
-                            : null;
-                          const disabled = currentRound.archetype === 'opinion_vote' && ownOptionId === option.id;
+                          const disabled = Boolean(option.ownerPlayerId === me.id || effectiveVoteOptionId || busyAction === 'vote');
                           return (
                             <button
                               key={option.id}
-                              className={`vote-option ${currentRound.votes[me.id] === option.id ? 'vote-option-active' : ''}`}
-                              onClick={() => void runAction('vote', `/api/lobbies/${lobby.code}/vote`, { optionId: option.id })}
-                              disabled={disabled || busyAction === 'vote'}
+                              className={`vote-option ${effectiveVoteOptionId === option.id ? 'vote-option-active' : ''}`}
+                              onClick={() => void submitVoteChoice(option.id)}
+                              disabled={disabled}
                             >
                               {option.text}
-                              {disabled ? <span className="vote-tag">your answer</span> : null}
+                              {option.ownerPlayerId === me.id ? <span className="vote-tag">your answer</span> : null}
                             </button>
                           );
                         })}
