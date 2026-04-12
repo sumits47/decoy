@@ -9,3 +9,4 @@ coverage
 .vercel
 /packages/database/generated
 .DS_Store
+*.tsbuildinfo
