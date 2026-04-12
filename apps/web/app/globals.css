@@ -55,6 +55,11 @@ textarea { resize: vertical; min-height: 88px; }
 .hero { padding: 64px 0 40px; }
 .hero-simple { padding-top: 72px; }
 .hero-copy { max-width: 760px; }
+.brand-lockup {
+  display: block;
+  width: min(100%, 540px);
+  height: auto;
+}
 .h1 {
   margin: 0;
   font-size: clamp(3rem, 10vw, 5.4rem);

@@ -1,0 +1,32 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="decoyCardBack" x1="42" y1="52" x2="188" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="decoyCardFront" x1="88" y1="68" x2="262" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#FB7185"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(28 26)">
+    <g transform="rotate(-8 128 136)">
+      <rect x="32" y="20" width="176" height="228" rx="32" fill="#08111F" fill-opacity="0.2"/>
+      <rect x="32" y="20" width="176" height="228" rx="32" stroke="url(#decoyCardBack)" stroke-width="5"/>
+    </g>
+
+    <g transform="translate(38 22) rotate(7 148 150)">
+      <rect x="66" y="28" width="184" height="240" rx="34" fill="url(#decoyCardFront)"/>
+      <rect x="66" y="28" width="184" height="240" rx="34" stroke="white" stroke-opacity="0.12" stroke-width="3"/>
+      <path d="M158 82L194 118L158 154L122 118L158 82Z" fill="#08111F" fill-opacity="0.74"/>
+      <circle cx="158" cy="118" r="13" fill="#22D3EE"/>
+      <path d="M134 198C146 180 163 170 178 170C193 170 210 180 222 198" stroke="#08111F" stroke-width="12" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(344 88)">
+    <text x="0" y="108" fill="#EFF6FF" font-size="150" font-weight="800" letter-spacing="-6" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">Decoy</text>
+    <text x="8" y="172" fill="#A2B3CE" font-size="38" font-weight="500" letter-spacing="-1.2" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">Lie well. Guess better.</text>
+  </g>
+</svg>

@@ -3,7 +3,10 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Decoy',
-  description: 'A web-first social bluffing party game.'
+  description: 'A web-first social bluffing party game.',
+  icons: {
+    icon: '/icon.svg'
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

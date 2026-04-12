@@ -95,8 +95,9 @@ export function LandingClient() {
       <section className="hero hero-simple">
         <div className="container stack-lg">
           <div className="hero-copy stack-md">
-            <span className="badge">Decoy · playable prototype</span>
-            <h1 className="h1">Lie well. Guess better.</h1>
+            <img className="brand-lockup" src="/branding/decoy-logo.svg" alt="Decoy" />
+            <span className="badge">Web-first social bluffing party game</span>
+            <h1 className="h1">One fake answer. Everybody hunting for it.</h1>
             <p className="lead">
               A server-authoritative vertical slice for the Decoy loop: create a lobby, join from separate devices,
               run a bluff round, run an opinion round, reveal scores, then advance.
