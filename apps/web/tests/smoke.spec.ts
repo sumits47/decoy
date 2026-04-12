@@ -30,23 +30,49 @@ async function reloadIfFallback(page: Page) {
   }
 }
 
-async function reloadAllIfFallback(pages: Page[]) {
-  if (!hasRealtime) {
-    await Promise.all(pages.map((page) => page.reload()));
-  }
+async function syncAllPages(pages: Page[]) {
+  await Promise.all(pages.map((page) => page.reload()));
+}
+
+async function waitForLobbyPost(page: Page, pathFragment: string, action: () => Promise<void>) {
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes(pathFragment) &&
+        response.ok()
+    ),
+    action()
+  ]);
 }
 
 async function submitRound(page: Page, text: string) {
   await expect(page.getByText('Submission phase')).toBeVisible();
   await page.locator('textarea').fill(text);
-  await page.getByRole('button', { name: 'Submit my answer' }).click();
-  await expect(page.getByText('Your answer is locked in.')).toBeVisible();
+  await waitForLobbyPost(page, '/submit', async () => {
+    await page.getByRole('button', { name: 'Submit my answer' }).click();
+  });
+  await expect
+    .poll(async () => {
+      const locked = await page.getByText('Your answer is locked in.').count();
+      const voting = await page.getByText('Voting phase').count();
+      return locked + voting;
+    })
+    .toBeGreaterThan(0);
 }
 
 async function voteFirstAvailable(page: Page) {
   await expect(page.getByText('Voting phase')).toBeVisible();
-  await page.locator('button.vote-option:not([disabled])').first().click();
-  await expect(page.getByText('Your vote is locked in.')).toBeVisible();
+  await waitForLobbyPost(page, '/vote', async () => {
+    await page.locator('button.vote-option:not([disabled])').first().click();
+  });
+  await expect
+    .poll(async () => {
+      const locked = await page.getByText('Your vote is locked in.').count();
+      const reveal = await page.getByText('Reveal').count();
+      return locked + reveal;
+    })
+    .toBeGreaterThan(0);
 }
 
 async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page) {
@@ -61,11 +87,18 @@ async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page)
 
   await hostPage.getByTestId('change-deck').click();
   await expect(hostPage.getByTestId('deck-browser')).toBeVisible();
-  await hostPage.getByTestId('deck-card-relationship_party').click();
+  await waitForLobbyPost(hostPage, '/settings', async () => {
+    await hostPage.getByTestId('deck-card-relationship_party').click();
+  });
   await hostPage.getByRole('link', { name: 'Back to lobby' }).click();
-  await hostPage.getByTestId('round-count-5').click();
-  await hostPage.getByTestId('start-game').click();
-  await reloadAllIfFallback([hostPage, playerTwoPage, playerThreePage]);
+  await waitForLobbyPost(hostPage, '/settings', async () => {
+    await hostPage.getByTestId('round-count-5').click();
+  });
+  await waitForLobbyPost(hostPage, '/start', async () => {
+    await hostPage.getByTestId('start-game').click();
+  });
+  await expect(hostPage.getByText('Round 1 / 5')).toBeVisible();
+  await syncAllPages([playerTwoPage, playerThreePage]);
 
   const seenPrompts = new Set<string>();
   const roundPages = [hostPage, playerTwoPage, playerThreePage];
@@ -80,17 +113,20 @@ async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page)
     await submitRound(hostPage, `host answer ${round}`);
     await submitRound(playerTwoPage, `riya answer ${round}`);
     await submitRound(playerThreePage, `ken answer ${round}`);
-    await reloadAllIfFallback(roundPages);
+    await syncAllPages(roundPages);
 
     await voteFirstAvailable(hostPage);
     await voteFirstAvailable(playerTwoPage);
     await voteFirstAvailable(playerThreePage);
-    await reloadAllIfFallback(roundPages);
+    await syncAllPages(roundPages);
 
-    await expect(hostPage.getByText('Reveal')).toBeVisible();
+    await expect(hostPage.getByText('Reveal', { exact: true }).last()).toBeVisible();
     if (round < 5) {
-      await hostPage.getByRole('button', { name: 'Next round' }).click();
-      await reloadAllIfFallback(roundPages);
+      await waitForLobbyPost(hostPage, '/next-round', async () => {
+        await hostPage.getByRole('button', { name: 'Next round' }).click();
+      });
+      await expect(hostPage.getByText(`Round ${round + 1} / 5`)).toBeVisible();
+      await syncAllPages([playerTwoPage, playerThreePage]);
     } else {
       await expect(hostPage.getByText('Match complete')).toBeVisible();
     }
@@ -128,12 +164,17 @@ test('deck settings sync across browsers over Ably without manual refresh', asyn
   await expect(watcherPage.getByRole('heading', { name: 'Decoy lobby' })).toBeVisible();
 
   await page.getByTestId('change-deck').click();
-  await page.getByTestId('deck-card-word_up').click();
+  await waitForLobbyPost(page, '/settings', async () => {
+    await page.getByTestId('deck-card-word_up').click();
+  });
+  await expect(page.getByTestId('selected-deck-art')).toHaveAttribute('alt', 'Word Up');
   await page.getByRole('link', { name: 'Back to lobby' }).click();
-  await page.getByTestId('round-count-10').click();
+  await waitForLobbyPost(page, '/settings', async () => {
+    await page.getByTestId('round-count-10').click();
+  });
 
   await expect(watcherPage.getByText('Word Up')).toBeVisible();
-  await expect(watcherPage.getByText('10 rounds')).toBeVisible();
+  await expect(watcherPage.getByTestId('deck-setup').getByText('10 rounds')).toBeVisible();
 
   await watcherContext.close();
 });
