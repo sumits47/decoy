@@ -286,5 +286,7 @@ export function toErrorResponse(error: unknown) {
   if (error instanceof LobbyError) {
     return { status: error.status, body: { error: error.message } };
   }
+
+  console.error('Unexpected lobby backend error', error);
   return { status: 500, body: { error: 'Something went wrong.' } };
 }
