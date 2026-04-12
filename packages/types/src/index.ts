@@ -7,6 +7,17 @@ export type RoundArchetype = 'bluff_trivia' | 'opinion_vote';
 export type ResolutionType = 'correct_answer' | 'audience_vote';
 export type MatchPhase = 'lobby' | 'in_round' | 'intermission' | 'finished';
 export type RoundPhase = 'submission' | 'voting' | 'reveal';
+export type DeckId =
+  | 'truth_comes_out'
+  | 'is_that_a_fact'
+  | 'movie_bluff'
+  | 'word_up'
+  | 'naked_truth'
+  | 'pop_culture'
+  | 'holiday_seasonal'
+  | 'relationship_party'
+  | 'niche_trivia';
+export type RoundCount = 5 | 7 | 10;
 
 export interface Player {
   id: PlayerId;
@@ -14,8 +25,23 @@ export interface Player {
   isHost?: boolean;
 }
 
+export interface DeckDefinition {
+  id: DeckId;
+  name: string;
+  description: string;
+  archetype: RoundArchetype;
+  isAdult?: boolean;
+  imagePath: string;
+}
+
+export interface LobbyConfig {
+  deckId: DeckId;
+  roundCount: RoundCount;
+}
+
 export interface PromptDefinition {
   id: string;
+  deckId: DeckId;
   archetype: RoundArchetype;
   resolutionType: ResolutionType;
   category: string;
@@ -81,7 +107,10 @@ export type RoundState = BluffTriviaRoundState | OpinionVoteRoundState;
 export interface GameSession {
   id: string;
   players: Player[];
+  deckId: DeckId;
+  roundCount: RoundCount;
   roundIndex: number;
+  usedPromptIds: string[];
   rounds: RoundState[];
   scores: Record<PlayerId, number>;
   phase: MatchPhase;
@@ -90,6 +119,7 @@ export interface GameSession {
 export interface LobbyState extends LobbySummary {
   players: Player[];
   revision: number;
+  config: LobbyConfig;
   game?: GameSession;
 }
 

@@ -2,20 +2,28 @@
 
 import * as Ably from 'ably';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { allSubmissionsComplete, allVotesComplete, getPromptDeck } from '@decoy/game-engine';
+import {
+  ROUND_COUNT_OPTIONS,
+  allSubmissionsComplete,
+  allVotesComplete,
+  getDeckCatalog
+} from '@decoy/game-engine';
 import {
   LOBBY_UPDATED_EVENT,
   getLobbyChannelName,
+  type DeckDefinition,
   type LobbyMembership,
   type LobbyRealtimeEvent,
   type LobbyState,
   type Player,
+  type RoundCount,
   type RoundState
 } from '@decoy/types';
 import { Surface } from '@decoy/ui';
 
 const PLAYER_KEY = 'decoy.player.identity.v2';
 const FALLBACK_POLL_MS = 30000;
+const DECKS = getDeckCatalog();
 
 function scoreRows(players: Player[], scores: Record<string, number>) {
   return [...players].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
@@ -205,6 +213,10 @@ function roundTitle(round: RoundState) {
   return round.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote';
 }
 
+function deckFor(deckId: string) {
+  return DECKS.find((deck) => deck.id === deckId) ?? DECKS[0];
+}
+
 export function LandingClient() {
   const [hostName, setHostName] = useState('Sumit');
   const [joinCode, setJoinCode] = useState('');
@@ -218,8 +230,7 @@ export function LandingClient() {
             <span className="badge">Web-first social bluffing party game</span>
             <h1 className="h1">One fake answer. Everybody hunting for it.</h1>
             <p className="lead">
-              A server-authoritative vertical slice for the Decoy loop: create a lobby, join from separate devices,
-              run a bluff round, run an opinion round, reveal scores, then advance.
+              Create a room, pick a themed deck, lock in five, seven, or ten rounds, and let the room bluff in realtime.
             </p>
           </div>
 
@@ -250,19 +261,6 @@ export function LandingClient() {
               </div>
             </Surface>
           </div>
-
-          <Surface>
-            <div className="panel stack-md">
-              <p className="eyebrow">Included in this build</p>
-              <div className="pill-row">
-                {getPromptDeck().map((prompt) => (
-                  <span key={prompt.id} className="pill">{prompt.archetype}</span>
-                ))}
-                <span className="pill">multi-device lobby</span>
-                <span className="pill">server snapshot polling</span>
-              </div>
-            </div>
-          </Surface>
         </div>
       </section>
     </main>
@@ -434,6 +432,11 @@ export function LobbyClient({ code }: { code: string }) {
   const playerId = membership?.playerId ?? null;
   const me = useMemo(() => lobby?.players.find((player) => player.id === playerId) ?? null, [lobby, playerId]);
   const isHost = Boolean(me && lobby && me.id === lobby.hostPlayerId);
+  const selectedDeck = useMemo(
+    () => deckFor(lobby?.game?.deckId ?? lobby?.config.deckId ?? DECKS[0].id),
+    [lobby]
+  );
+  const selectedRoundCount = lobby?.game?.roundCount ?? lobby?.config.roundCount ?? ROUND_COUNT_OPTIONS[0];
   const currentRound = lobby?.game?.rounds[lobby.game.roundIndex];
   const draftRoundKey = useMemo(() => {
     if (!lobby?.game || !currentRound || !playerId) return null;
@@ -522,6 +525,17 @@ export function LobbyClient({ code }: { code: string }) {
     }
   }, [lobby, runAction, votingKey]);
 
+  const updateSettings = useCallback(async (nextDeckId?: DeckDefinition['id'], nextRoundCount?: RoundCount) => {
+    if (!lobby) return;
+
+    const deckId = nextDeckId ?? lobby.config.deckId;
+    const roundCount = nextRoundCount ?? lobby.config.roundCount;
+    await runAction('settings', `/api/lobbies/${lobby.code}/settings`, {
+      deckId,
+      roundCount: String(roundCount)
+    });
+  }, [lobby, runAction]);
+
   if (loading) return null;
 
   if (!lobby) {
@@ -580,23 +594,89 @@ export function LobbyClient({ code }: { code: string }) {
                 {!me ? (
                   <p className="muted">This browser has not joined the room yet. Use the join screen with this code to participate.</p>
                 ) : (
-                  <p className="muted">Waiting for the host to start once at least 3 players are in.</p>
+                  <p className="muted">Waiting for the host to pick a deck, lock the round count, and start once at least 3 players are in.</p>
                 )}
               </div>
             </Surface>
 
             <Surface>
-              <div className="panel stack-md">
-                <p className="eyebrow">Game flow</p>
-                <ol className="steps">
-                  <li>Bluff trivia round</li>
-                  <li>Opinion vote round</li>
-                  <li>Score reveal</li>
-                  <li>Next round / finish</li>
-                </ol>
+              <div className="panel stack-md" data-testid="deck-setup">
+                <p className="eyebrow">Game setup</p>
+                <div className="deck-spotlight">
+                  <img
+                    className="deck-spotlight-art"
+                    src={selectedDeck.imagePath}
+                    alt={selectedDeck.name}
+                    data-testid="selected-deck-art"
+                  />
+                  <div className="stack-sm">
+                    <h2 className="deck-title">{selectedDeck.name}</h2>
+                    <p className="muted">{selectedDeck.description}</p>
+                    <div className="pill-row">
+                      <span className="pill">{selectedDeck.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote'}</span>
+                      <span className="pill">{selectedRoundCount} rounds</span>
+                      {selectedDeck.isAdult ? <span className="pill">adult deck</span> : null}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="stack-sm">
+                  <div className="space-between wrap gap-sm">
+                    <strong>Deck</strong>
+                    <span className="muted">{isHost ? 'Host controls update everyone live.' : 'Live-updating from the host.'}</span>
+                  </div>
+                  <div className="deck-grid">
+                    {DECKS.map((deck) => {
+                      const active = lobby.config.deckId === deck.id;
+                      return (
+                        <button
+                          key={deck.id}
+                          type="button"
+                          className={`deck-card ${active ? 'deck-card-active' : ''}`}
+                          data-testid={`deck-card-${deck.id}`}
+                          disabled={!isHost || Boolean(lobby.game) || busyAction === 'settings'}
+                          onClick={() => void updateSettings(deck.id)}
+                        >
+                          <img className="deck-card-art" src={deck.imagePath} alt="" aria-hidden="true" />
+                          <div className="stack-xs deck-card-copy">
+                            <strong>{deck.name}</strong>
+                            <span>{deck.description}</span>
+                            <span className="deck-card-meta">
+                              {deck.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote'}
+                              {deck.isAdult ? ' • adult' : ''}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="stack-sm">
+                  <strong>Rounds</strong>
+                  <div className="round-count-row" role="group" aria-label="Choose round count">
+                    {ROUND_COUNT_OPTIONS.map((count) => {
+                      const active = lobby.config.roundCount === count;
+                      return (
+                        <button
+                          key={count}
+                          type="button"
+                          className={`round-count-button ${active ? 'round-count-button-active' : ''}`}
+                          data-testid={`round-count-${count}`}
+                          disabled={!isHost || Boolean(lobby.game) || busyAction === 'settings'}
+                          onClick={() => void updateSettings(undefined, count)}
+                        >
+                          {count} rounds
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <button
                   className="button button-primary"
-                  disabled={!isHost || lobby.players.length < 3 || busyAction === 'start'}
+                  data-testid="start-game"
+                  disabled={!isHost || lobby.players.length < 3 || busyAction === 'start' || busyAction === 'settings'}
                   onClick={() => void runAction('start', `/api/lobbies/${lobby.code}/start`)}
                 >
                   Start game
@@ -610,10 +690,14 @@ export function LobbyClient({ code }: { code: string }) {
               <div className="panel stack-md">
                 <div className="space-between wrap gap-sm">
                   <div>
-                    <p className="eyebrow">Round {lobby.game.roundIndex + 1} / {getPromptDeck().length}</p>
+                    <p className="eyebrow">Round {lobby.game.roundIndex + 1} / {lobby.game.roundCount}</p>
                     <h2>{roundTitle(currentRound)}</h2>
                   </div>
                   <span className="pill">{currentRound.phase}</span>
+                </div>
+                <div className="pill-row">
+                  <span className="pill">{deckFor(lobby.game.deckId).name}</span>
+                  <span className="pill">{lobby.game.roundCount} rounds</span>
                 </div>
                 <p className="prompt-category">{currentRound.prompt.category}</p>
                 <p className="prompt-copy">{currentRound.prompt.text}</p>

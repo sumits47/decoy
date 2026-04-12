@@ -8,6 +8,10 @@ import {
   castVote as castVoteOnRound,
   createId,
   createLobby as createLobbyState,
+  getDefaultLobbyConfig,
+  getDeckDefinition,
+  getPromptsForDeck,
+  isRoundCount,
   lockSubmissions,
   scoreRound,
   startGame as startGameState,
@@ -17,7 +21,9 @@ import { prisma } from '@decoy/database';
 import {
   LOBBY_UPDATED_EVENT,
   getLobbyChannelName,
+  type DeckId,
   type LobbyCode,
+  type LobbyConfig,
   type LobbyMembership,
   type LobbyRealtimeEvent,
   type LobbyState,
@@ -45,9 +51,15 @@ function clone<T>(value: T): T {
 }
 
 function normalizeLobbyState(state: LobbyState): LobbyState {
+  const config = state.config ?? getDefaultLobbyConfig();
+
   return {
     ...state,
-    revision: typeof state.revision === 'number' ? state.revision : 0
+    revision: typeof state.revision === 'number' ? state.revision : 0,
+    config: {
+      deckId: config.deckId,
+      roundCount: config.roundCount
+    }
   };
 }
 
@@ -240,6 +252,10 @@ export async function startLobbyGame(code: string, actorSessionToken: PlayerSess
   const lobby = await requireLobby(code);
   await requireHostSession(lobby, actorSessionToken);
   if (lobby.players.length < 3) throw new LobbyError(400, 'Need at least 3 players.');
+  const prompts = getPromptsForDeck(lobby.config.deckId);
+  if (prompts.length < lobby.config.roundCount) {
+    throw new LobbyError(400, 'Selected deck does not have enough prompts for that round count.');
+  }
   return saveLobby(startGameState(lobby));
 }
 
@@ -340,6 +356,46 @@ export async function resetLobbyGame(code: string, actorSessionToken: PlayerSess
   const lobby = await requireLobby(code);
   await requireHostSession(lobby, actorSessionToken);
   return saveLobby({ ...lobby, game: undefined });
+}
+
+function validateLobbyConfig(deckId: string, roundCount: number): LobbyConfig {
+  const deck = getDeckDefinition(deckId as DeckId);
+  if (!deck) {
+    throw new LobbyError(400, 'Unknown deck.');
+  }
+
+  if (!isRoundCount(roundCount)) {
+    throw new LobbyError(400, 'Round count must be 5, 7, or 10.');
+  }
+
+  const prompts = getPromptsForDeck(deck.id);
+  if (prompts.length < roundCount) {
+    throw new LobbyError(400, 'Selected deck does not have enough prompts for that round count.');
+  }
+
+  return {
+    deckId: deck.id,
+    roundCount
+  };
+}
+
+export async function updateLobbySettings(
+  code: string,
+  actorSessionToken: PlayerSessionToken,
+  deckId: string,
+  roundCount: number
+) {
+  const lobby = await requireLobby(code);
+  await requireHostSession(lobby, actorSessionToken);
+  if (lobby.game) {
+    throw new LobbyError(409, 'Settings can only be changed before the game starts.');
+  }
+
+  const config = validateLobbyConfig(deckId, roundCount);
+  return saveLobby({
+    ...lobby,
+    config
+  });
 }
 
 export async function createLobbyRealtimeTokenRequest(code: string) {

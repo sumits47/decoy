@@ -1,0 +1,65 @@
+[
+  {
+    "deckId": "truth_comes_out",
+    "title": "Nosy raccoon (Unsplash)",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Nosy_raccoon_(Unsplash).jpg",
+    "license": "CC0 1.0",
+    "notes": "Chosen for nosy gossip energy."
+  },
+  {
+    "deckId": "is_that_a_fact",
+    "title": "Scheiner Viewing Sunspots 1625",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Scheiner_Viewing_Sunspots_1625.jpg",
+    "license": "Public domain",
+    "notes": "Used as an absurd fake-scholar visual."
+  },
+  {
+    "deckId": "movie_bluff",
+    "title": "Monsteronthecampus",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Monsteronthecampus.jpg",
+    "license": "Public domain",
+    "notes": "Cheap-monster-poster energy for bluffing movie plots."
+  },
+  {
+    "deckId": "word_up",
+    "title": "GUGG Owl Comedy",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:GUGG_Owl_Comedy.jpg",
+    "license": "CC0 1.0 / public domain reproduction",
+    "notes": "A pompous owl for the dictionary gremlin deck."
+  },
+  {
+    "deckId": "naked_truth",
+    "title": "Cupid by Edme Bouchardon, 1744",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Cupid_by_Edme_Bouchardon,_1744,_marble_-_National_Gallery_of_Art,_Washington_-_DSC09968.JPG",
+    "license": "CC0 1.0",
+    "notes": "Cheeky but tasteful classic-art energy."
+  },
+  {
+    "deckId": "pop_culture",
+    "title": "Paparazzi (Unsplash)",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Paparazzi_(Unsplash).jpg",
+    "license": "CC0 1.0",
+    "notes": "Closest fit for celebrity-chaos energy."
+  },
+  {
+    "deckId": "holiday_seasonal",
+    "title": "Christmas Santa 25",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Christmas_Santa_25.svg",
+    "license": "Public domain",
+    "notes": "Classic festive art for the seasonal deck."
+  },
+  {
+    "deckId": "relationship_party",
+    "title": "Young Romance",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Young_Romance.jpg",
+    "license": "Public domain",
+    "notes": "Melodramatic comic-book romance for the party deck."
+  },
+  {
+    "deckId": "niche_trivia",
+    "title": "Original illustration of The Death of Sherlock Holmes, 1893 (cropped)",
+    "sourceUrl": "https://commons.wikimedia.org/wiki/File:Sidney_Paget_-_Original_illustration_of_The_Death_of_Sherlock_Holmes,_1893_(cropped).png",
+    "license": "Public domain",
+    "notes": "Detective-board energy for trivia obsessives."
+  }
+]

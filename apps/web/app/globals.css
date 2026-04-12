@@ -228,6 +228,89 @@ textarea { resize: vertical; min-height: 88px; }
 .muted-card {
   color: var(--muted);
 }
+.deck-title {
+  margin: 0;
+  font-size: 1.45rem;
+}
+.deck-spotlight {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(34, 211, 238, 0.06));
+}
+.deck-spotlight-art,
+.deck-card-art {
+  width: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+}
+.deck-spotlight-art {
+  height: 180px;
+}
+.deck-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.deck-card {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  border-radius: 22px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  text-align: left;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.deck-card:hover {
+  transform: translateY(-1px);
+}
+.deck-card-active {
+  border-color: rgba(34, 211, 238, 0.55);
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.12));
+}
+.deck-card-art {
+  height: 96px;
+}
+.deck-card-copy {
+  min-width: 0;
+}
+.deck-card-copy span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.deck-card-meta {
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.round-count-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.round-count-button {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  font-weight: 700;
+}
+.round-count-button-active {
+  border-color: rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.12);
+}
 .steps {
   margin: 0;
   padding-left: 18px;
@@ -275,5 +358,15 @@ textarea { resize: vertical; min-height: 88px; }
   50% {
     opacity: 1;
     transform: translateY(-2px) scale(1);
+  }
+}
+
+@media (max-width: 900px) {
+  .deck-grid { grid-template-columns: 1fr; }
+  .deck-spotlight {
+    grid-template-columns: 1fr;
+  }
+  .deck-spotlight-art {
+    height: 220px;
   }
 }

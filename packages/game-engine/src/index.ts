@@ -1,35 +1,41 @@
 import type {
   BluffOption,
   BluffTriviaRoundState,
+  DeckId,
   GameSession,
+  LobbyConfig,
   LobbyState,
   OpinionOption,
   OpinionVoteRoundState,
   Player,
   PlayerId,
   PromptDefinition,
+  RoundCount,
   RoundState
 } from '@decoy/types';
+import {
+  DEFAULT_DECK_ID,
+  DEFAULT_ROUND_COUNT,
+  ROUND_COUNT_OPTIONS,
+  getDeckCatalog,
+  getDeckDefinition,
+  getDefaultLobbyConfig,
+  isDeckId,
+  isRoundCount
+} from './catalog';
+import { getAllPrompts, getPromptsForDeck } from './prompts';
 
-const promptDeck: PromptDefinition[] = [
-  {
-    id: 'bt-1',
-    archetype: 'bluff_trivia',
-    resolutionType: 'correct_answer',
-    category: 'Food history',
-    text: 'What ingredient was once used to make the world’s first potato chips purple?',
-    canonicalAnswer: 'Purple potatoes',
-    votePrompt: 'Which answer is the real fact?'
-  },
-  {
-    id: 'ov-1',
-    archetype: 'opinion_vote',
-    resolutionType: 'audience_vote',
-    category: 'Petty chaos',
-    text: 'What is the pettiest possible way to win an office argument?',
-    votePrompt: 'Vote for the funniest answer. No self-votes.'
-  }
-];
+export {
+  DEFAULT_DECK_ID,
+  DEFAULT_ROUND_COUNT,
+  ROUND_COUNT_OPTIONS,
+  getDeckCatalog,
+  getDeckDefinition,
+  getDefaultLobbyConfig,
+  getPromptsForDeck,
+  isDeckId,
+  isRoundCount
+};
 
 export function createId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
@@ -38,6 +44,13 @@ export function createId(prefix: string) {
 export function createLobbyCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+function normalizeLobbyConfig(config?: Partial<LobbyConfig>): LobbyConfig {
+  return {
+    deckId: config?.deckId ?? DEFAULT_DECK_ID,
+    roundCount: config?.roundCount ?? DEFAULT_ROUND_COUNT
+  };
 }
 
 export function createLobby(hostName: string): LobbyState {
@@ -49,7 +62,8 @@ export function createLobby(hostName: string): LobbyState {
     hostPlayerId: host.id,
     createdAt: new Date().toISOString(),
     players: [host],
-    revision: 0
+    revision: 0,
+    config: getDefaultLobbyConfig()
   };
 }
 
@@ -63,16 +77,55 @@ export function addPlayer(lobby: LobbyState, name: string): LobbyState {
   };
 }
 
+export function updateLobbyConfig(lobby: LobbyState, config: LobbyConfig): LobbyState {
+  return {
+    ...lobby,
+    config: normalizeLobbyConfig(config)
+  };
+}
+
+function ensureDeckHasEnoughPrompts(deckId: DeckId, roundCount: RoundCount) {
+  const deck = getDeckDefinition(deckId);
+  if (!deck) {
+    throw new Error(`Unknown deck: ${deckId}`);
+  }
+
+  const prompts = getPromptsForDeck(deckId);
+  if (prompts.length < roundCount) {
+    throw new Error(`Deck ${deckId} only has ${prompts.length} prompts.`);
+  }
+
+  return prompts;
+}
+
+function pickRandomPrompt(deckId: DeckId, usedPromptIds: string[]): PromptDefinition | null {
+  const available = getPromptsForDeck(deckId).filter((prompt) => !usedPromptIds.includes(prompt.id));
+  if (!available.length) return null;
+  return available[Math.floor(Math.random() * available.length)] ?? null;
+}
+
 export function startGame(lobby: LobbyState): LobbyState {
+  const config = normalizeLobbyConfig(lobby.config);
+  ensureDeckHasEnoughPrompts(config.deckId, config.roundCount);
+
+  const firstPrompt = pickRandomPrompt(config.deckId, []);
+  if (!firstPrompt) {
+    throw new Error(`Deck ${config.deckId} does not have a starting prompt.`);
+  }
+
   const scores = Object.fromEntries(lobby.players.map((player) => [player.id, 0]));
-  const firstRound = createRound(promptDeck[0], lobby.players);
+  const firstRound = createRound(firstPrompt, lobby.players);
 
   return {
     ...lobby,
+    config,
     game: {
       id: createId('game'),
       players: lobby.players,
+      deckId: config.deckId,
+      roundCount: config.roundCount,
       roundIndex: 0,
+      usedPromptIds: [firstPrompt.id],
       rounds: [firstRound],
       scores,
       phase: 'in_round'
@@ -81,7 +134,7 @@ export function startGame(lobby: LobbyState): LobbyState {
 }
 
 export function getPromptDeck() {
-  return promptDeck;
+  return getAllPrompts();
 }
 
 export function createRound(prompt: PromptDefinition, players: Player[]): RoundState {
@@ -255,7 +308,7 @@ export function applyRoundScore(game: GameSession, round: RoundState): GameSessi
     nextScores[playerId] = (nextScores[playerId] ?? 0) + delta;
   });
 
-  const isLastRound = game.roundIndex >= promptDeck.length - 1;
+  const isLastRound = game.roundIndex >= game.roundCount - 1;
 
   return {
     ...game,
@@ -266,16 +319,22 @@ export function applyRoundScore(game: GameSession, round: RoundState): GameSessi
 }
 
 export function advanceToNextRound(game: GameSession): GameSession {
-  const nextRoundIndex = game.roundIndex + 1;
-  const prompt = promptDeck[nextRoundIndex];
+  if (game.roundIndex >= game.roundCount - 1) {
+    return { ...game, phase: 'finished' };
+  }
+
+  const prompt = pickRandomPrompt(game.deckId, game.usedPromptIds);
   if (!prompt) {
     return { ...game, phase: 'finished' };
   }
+
+  const nextRoundIndex = game.roundIndex + 1;
 
   return {
     ...game,
     roundIndex: nextRoundIndex,
     phase: 'in_round',
+    usedPromptIds: [...game.usedPromptIds, prompt.id],
     rounds: [...game.rounds, createRound(prompt, game.players)]
   };
 }
