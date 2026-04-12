@@ -10,7 +10,8 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
-    "db:generate": "./node_modules/.bin/prisma generate --schema packages/database/prisma/schema.prisma"
+    "postinstall": "pnpm db:generate",
+    "db:generate": "pnpm --filter @decoy/database db:generate"
   },
   "devDependencies": {
     "prisma": "6.6.0",
