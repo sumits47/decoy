@@ -315,7 +315,28 @@ export function CreateLobbyClient({ hostName }: { hostName: string }) {
     );
   }
 
-  if (!createdLobbyCode) return null;
+  if (!createdLobbyCode) {
+    return (
+      <main className="app-shell">
+        <div className="container narrow stack-lg section-pad">
+          <Surface>
+            <div className="panel stack-md loading-panel">
+              <div className="loading-badge" aria-hidden="true">
+                <span className="loading-dot" />
+                <span className="loading-dot" />
+                <span className="loading-dot" />
+              </div>
+              <p className="eyebrow">Creating lobby</p>
+              <h1 className="section-title">Setting up your room</h1>
+              <p className="muted">
+                Reserving a code for <strong>{hostName || 'Host'}</strong> and preparing the first browser session.
+              </p>
+            </div>
+          </Surface>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
