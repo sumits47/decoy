@@ -1,6 +1,7 @@
 export type PlayerId = string;
 export type LobbyCode = string;
 export type PlayerSessionToken = string;
+export const LOBBY_UPDATED_EVENT = 'lobby.updated';
 
 export type RoundArchetype = 'bluff_trivia' | 'opinion_vote';
 export type ResolutionType = 'correct_answer' | 'audience_vote';
@@ -88,6 +89,7 @@ export interface GameSession {
 
 export interface LobbyState extends LobbySummary {
   players: Player[];
+  revision: number;
   game?: GameSession;
 }
 
@@ -96,4 +98,14 @@ export interface LobbyMembership {
   playerId: PlayerId;
   playerName: string;
   playerSessionToken: PlayerSessionToken;
+}
+
+export interface LobbyRealtimeEvent {
+  code: LobbyCode;
+  revision: number;
+  lobby: LobbyState;
+}
+
+export function getLobbyChannelName(code: string) {
+  return `lobby:${code.trim().toUpperCase()}`;
 }

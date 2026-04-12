@@ -48,7 +48,8 @@ export function createLobby(hostName: string): LobbyState {
     code: createLobbyCode(),
     hostPlayerId: host.id,
     createdAt: new Date().toISOString(),
-    players: [host]
+    players: [host],
+    revision: 0
   };
 }
 

@@ -1,3 +1,4 @@
+import * as Ably from 'ably';
 import {
   addPlayer,
   advanceToNextRound,
@@ -13,7 +14,18 @@ import {
   submitAnswer as submitRoundAnswer
 } from '@decoy/game-engine';
 import { prisma } from '@decoy/database';
-import type { LobbyCode, LobbyMembership, LobbyState, Player, PlayerId, PlayerSessionToken, RoundState } from '@decoy/types';
+import {
+  LOBBY_UPDATED_EVENT,
+  getLobbyChannelName,
+  type LobbyCode,
+  type LobbyMembership,
+  type LobbyRealtimeEvent,
+  type LobbyState,
+  type Player,
+  type PlayerId,
+  type PlayerSessionToken,
+  type RoundState
+} from '@decoy/types';
 
 class LobbyError extends Error {
   status: number;
@@ -32,12 +44,54 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function normalizeLobbyState(state: LobbyState): LobbyState {
+  return {
+    ...state,
+    revision: typeof state.revision === 'number' ? state.revision : 0
+  };
+}
+
 function deserializeLobby(stateJson: unknown): LobbyState {
-  return clone(stateJson as LobbyState);
+  return normalizeLobbyState(clone(stateJson as LobbyState));
 }
 
 function serializeLobby(lobby: LobbyState) {
   return clone(lobby) as any;
+}
+
+let realtimeClient: Ably.Rest | null | undefined;
+
+function getRealtimeClient() {
+  if (realtimeClient !== undefined) return realtimeClient;
+
+  const key = process.env.ABLY_API_KEY;
+  realtimeClient = key ? new Ably.Rest(key) : null;
+  return realtimeClient;
+}
+
+function withNextRevision(lobby: LobbyState): LobbyState {
+  const snapshot = normalizeLobbyState(clone(lobby));
+  return {
+    ...snapshot,
+    revision: snapshot.revision + 1
+  };
+}
+
+async function publishLobbyUpdate(lobby: LobbyState) {
+  const realtime = getRealtimeClient();
+  if (!realtime) return;
+
+  const event: LobbyRealtimeEvent = {
+    code: lobby.code,
+    revision: lobby.revision,
+    lobby
+  };
+
+  try {
+    await realtime.channels.get(getLobbyChannelName(lobby.code)).publish(LOBBY_UPDATED_EVENT, event);
+  } catch (error) {
+    console.error('Failed to publish lobby update', { code: lobby.code, revision: lobby.revision, error });
+  }
 }
 
 async function requireLobby(code: string) {
@@ -47,7 +101,7 @@ async function requireLobby(code: string) {
 }
 
 async function saveLobby(lobby: LobbyState) {
-  const snapshot = clone(lobby);
+  const snapshot = withNextRevision(lobby);
   await prisma.lobby.upsert({
     where: { code: normalizeCode(snapshot.code) },
     create: {
@@ -62,6 +116,8 @@ async function saveLobby(lobby: LobbyState) {
       stateJson: serializeLobby(snapshot)
     }
   });
+
+  await publishLobbyUpdate(snapshot);
   return snapshot;
 }
 
@@ -284,6 +340,22 @@ export async function resetLobbyGame(code: string, actorSessionToken: PlayerSess
   const lobby = await requireLobby(code);
   await requireHostSession(lobby, actorSessionToken);
   return saveLobby({ ...lobby, game: undefined });
+}
+
+export async function createLobbyRealtimeTokenRequest(code: string) {
+  await requireLobby(code);
+
+  const realtime = getRealtimeClient();
+  if (!realtime) {
+    throw new LobbyError(503, 'Realtime is not configured on the server.');
+  }
+
+  return realtime.auth.createTokenRequest({
+    capability: JSON.stringify({
+      [getLobbyChannelName(code)]: ['subscribe']
+    }),
+    ttl: 60 * 60 * 1000
+  });
 }
 
 export function toErrorResponse(error: unknown) {
