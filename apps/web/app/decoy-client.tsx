@@ -1,7 +1,7 @@
 'use client';
 
 import * as Ably from 'ably';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ROUND_COUNT_OPTIONS,
   allSubmissionsComplete,
@@ -213,8 +213,113 @@ function roundTitle(round: RoundState) {
   return round.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote';
 }
 
+function deckArchetypeLabel(archetype: DeckDefinition['archetype']) {
+  return archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote';
+}
+
 function deckFor(deckId: string) {
   return DECKS.find((deck) => deck.id === deckId) ?? DECKS[0];
+}
+
+function DeckTypeIcon({ archetype }: { archetype: DeckDefinition['archetype'] }) {
+  if (archetype === 'bluff_trivia') {
+    return (
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path
+          d="M5.5 4.75h9a1.75 1.75 0 0 1 1.75 1.75v7a1.75 1.75 0 0 1-1.75 1.75h-9A1.75 1.75 0 0 1 3.75 13.5v-7A1.75 1.75 0 0 1 5.5 4.75Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path d="M7 8.25h6M7 11.25h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="13.75" cy="11.25" r="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M10 16.25c3.452 0 6.25-2.35 6.25-5.25S13.452 5.75 10 5.75 3.75 8.1 3.75 11c0 1.378.637 2.632 1.68 3.568.23.205.36.498.34.806l-.098 1.48 1.783-.9c.23-.117.495-.145.748-.08.565.146 1.167.226 1.797.226Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <circle cx="7.5" cy="11" r="0.9" fill="currentColor" />
+      <circle cx="10" cy="11" r="0.9" fill="currentColor" />
+      <circle cx="12.5" cy="11" r="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
+function DeckTypePill({ archetype }: { archetype: DeckDefinition['archetype'] }) {
+  return (
+    <span className="deck-type-pill">
+      <span className="deck-type-pill-icon">
+        <DeckTypeIcon archetype={archetype} />
+      </span>
+      {deckArchetypeLabel(archetype)}
+    </span>
+  );
+}
+
+function DeckCard({
+  deck,
+  active,
+  disabled,
+  onClick,
+  footer,
+  imageTestId,
+  showSelectedBadge = active
+}: {
+  deck: DeckDefinition;
+  active: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  footer?: ReactNode;
+  imageTestId?: string;
+  showSelectedBadge?: boolean;
+}) {
+  const content = (
+    <>
+      <div className="deck-card-top">
+        <img
+          className="deck-card-art"
+          src={deck.imagePath}
+          alt={imageTestId ? deck.name : ''}
+          aria-hidden={imageTestId ? undefined : true}
+          data-testid={imageTestId}
+        />
+        <div className="deck-card-info stack-xs">
+          <div className="space-between wrap gap-sm">
+            <strong className="deck-card-name">{deck.name}</strong>
+            {showSelectedBadge ? <span className="deck-card-selected">Selected</span> : null}
+          </div>
+          <div className="pill-row">
+            <DeckTypePill archetype={deck.archetype} />
+            {deck.isAdult ? <span className="pill">Adult</span> : null}
+          </div>
+        </div>
+      </div>
+      <p className="deck-card-description">{deck.description}</p>
+      {footer ? <div className="deck-card-footer">{footer}</div> : null}
+    </>
+  );
+
+  if (!onClick) {
+    return <div className={`deck-card ${active ? 'deck-card-active' : ''}`}>{content}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      className={`deck-card deck-card-button ${active ? 'deck-card-active' : ''}`}
+      data-testid={`deck-card-${deck.id}`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {content}
+    </button>
+  );
 }
 
 export function LandingClient() {
@@ -416,7 +521,13 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   );
 }
 
-export function LobbyClient({ code }: { code: string }) {
+export function LobbyClient({
+  code,
+  screen = 'lobby'
+}: {
+  code: string;
+  screen?: 'lobby' | 'decks';
+}) {
   const { lobby, loading, error, refresh, setLobby } = useLobby(code.toUpperCase());
   const [membership, setMembership] = useState<LobbyMembership | null>(null);
   const [draft, setDraft] = useState('');
@@ -437,6 +548,8 @@ export function LobbyClient({ code }: { code: string }) {
     [lobby]
   );
   const selectedRoundCount = lobby?.game?.roundCount ?? lobby?.config.roundCount ?? ROUND_COUNT_OPTIONS[0];
+  const deckBrowserHref = `/lobby/${code.toUpperCase()}/decks`;
+  const lobbyHref = `/lobby/${code.toUpperCase()}`;
   const currentRound = lobby?.game?.rounds[lobby.game.roundIndex];
   const draftRoundKey = useMemo(() => {
     if (!lobby?.game || !currentRound || !playerId) return null;
@@ -561,13 +674,10 @@ export function LobbyClient({ code }: { code: string }) {
     <main className="app-shell">
       <div className="container section-pad stack-lg">
         <div className="topbar">
-          <div className="stack-sm">
-            <div className="stack-inline wrap gap-sm">
-              <span className="badge">Room {lobby.code}</span>
-              {me ? <span className="pill">You: {me.name}</span> : <span className="pill">Read-only view</span>}
-              {isHost ? <span className="pill">host controls</span> : null}
-            </div>
-            <h1 className="section-title">Decoy lobby</h1>
+          <div className="stack-inline wrap gap-sm">
+            <span className="badge">Room {lobby.code}</span>
+            {me ? <span className="pill">You: {me.name}</span> : <span className="pill">Read-only view</span>}
+            {isHost ? <span className="pill">host controls</span> : null}
           </div>
           <a className="button button-secondary" href="/">Home</a>
         </div>
@@ -576,114 +686,149 @@ export function LobbyClient({ code }: { code: string }) {
         {error && lobby ? <p className="muted">Refresh issue: {error}</p> : null}
 
         {!lobby.game ? (
-          <div className="grid lobby-grid">
+          screen === 'decks' ? (
             <Surface>
-              <div className="panel stack-md">
-                <p className="eyebrow">Players</p>
-                <div className="stack-sm">
-                  {lobby.players.map((player) => (
-                    <div key={player.id} className="list-row">
-                      <span>{player.name}</span>
-                      <div className="stack-inline">
-                        {player.id === playerId ? <span className="pill">you</span> : null}
-                        {player.isHost ? <span className="pill">host</span> : null}
-                      </div>
-                    </div>
-                  ))}
+              <div className="panel stack-lg" data-testid="deck-browser">
+                <div className="space-between wrap gap-sm">
+                  <div className="stack-sm">
+                    <p className="eyebrow">Deck library</p>
+                    <h2 className="section-title">Choose the room&apos;s next flavor of chaos</h2>
+                    <p className="muted">
+                      {isHost
+                        ? 'Pick a deck here, then head back to the lobby to start the game.'
+                        : 'Only the host can change decks, but everyone can preview what is selected.'}
+                    </p>
+                  </div>
+                  <a className="button button-secondary" href={lobbyHref}>Back to lobby</a>
                 </div>
-                {!me ? (
-                  <p className="muted">This browser has not joined the room yet. Use the join screen with this code to participate.</p>
-                ) : (
-                  <p className="muted">Waiting for the host to pick a deck, lock the round count, and start once at least 3 players are in.</p>
-                )}
-              </div>
-            </Surface>
 
-            <Surface>
-              <div className="panel stack-md" data-testid="deck-setup">
-                <p className="eyebrow">Game setup</p>
-                <div className="deck-spotlight">
+                <div className="deck-browser-current">
                   <img
-                    className="deck-spotlight-art"
+                    className="deck-browser-current-art"
                     src={selectedDeck.imagePath}
                     alt={selectedDeck.name}
                     data-testid="selected-deck-art"
                   />
                   <div className="stack-sm">
-                    <h2 className="deck-title">{selectedDeck.name}</h2>
-                    <p className="muted">{selectedDeck.description}</p>
+                    <p className="eyebrow">Currently selected</p>
+                    <h3 className="deck-title">{selectedDeck.name}</h3>
                     <div className="pill-row">
-                      <span className="pill">{selectedDeck.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote'}</span>
+                      <DeckTypePill archetype={selectedDeck.archetype} />
                       <span className="pill">{selectedRoundCount} rounds</span>
-                      {selectedDeck.isAdult ? <span className="pill">adult deck</span> : null}
+                      {selectedDeck.isAdult ? <span className="pill">Adult deck</span> : null}
                     </div>
                   </div>
                 </div>
 
-                <div className="stack-sm">
-                  <div className="space-between wrap gap-sm">
-                    <strong>Deck</strong>
-                    <span className="muted">{isHost ? 'Host controls update everyone live.' : 'Live-updating from the host.'}</span>
-                  </div>
-                  <div className="deck-grid">
-                    {DECKS.map((deck) => {
-                      const active = lobby.config.deckId === deck.id;
-                      return (
-                        <button
-                          key={deck.id}
-                          type="button"
-                          className={`deck-card ${active ? 'deck-card-active' : ''}`}
-                          data-testid={`deck-card-${deck.id}`}
-                          disabled={!isHost || Boolean(lobby.game) || busyAction === 'settings'}
-                          onClick={() => void updateSettings(deck.id)}
-                        >
-                          <img className="deck-card-art" src={deck.imagePath} alt="" aria-hidden="true" />
-                          <div className="stack-xs deck-card-copy">
-                            <strong>{deck.name}</strong>
-                            <span>{deck.description}</span>
-                            <span className="deck-card-meta">
-                              {deck.archetype === 'bluff_trivia' ? 'Bluff trivia' : 'Opinion vote'}
-                              {deck.isAdult ? ' • adult' : ''}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="deck-browser-grid">
+                  {DECKS.map((deck) => (
+                    <DeckCard
+                      key={deck.id}
+                      deck={deck}
+                      active={lobby.config.deckId === deck.id}
+                      disabled={!isHost || busyAction === 'settings'}
+                      onClick={
+                        isHost && busyAction !== 'settings'
+                          ? () => void updateSettings(deck.id)
+                          : undefined
+                      }
+                    />
+                  ))}
                 </div>
-
-                <div className="stack-sm">
-                  <strong>Rounds</strong>
-                  <div className="round-count-row" role="group" aria-label="Choose round count">
-                    {ROUND_COUNT_OPTIONS.map((count) => {
-                      const active = lobby.config.roundCount === count;
-                      return (
-                        <button
-                          key={count}
-                          type="button"
-                          className={`round-count-button ${active ? 'round-count-button-active' : ''}`}
-                          data-testid={`round-count-${count}`}
-                          disabled={!isHost || Boolean(lobby.game) || busyAction === 'settings'}
-                          onClick={() => void updateSettings(undefined, count)}
-                        >
-                          {count} rounds
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <button
-                  className="button button-primary"
-                  data-testid="start-game"
-                  disabled={!isHost || lobby.players.length < 3 || busyAction === 'start' || busyAction === 'settings'}
-                  onClick={() => void runAction('start', `/api/lobbies/${lobby.code}/start`)}
-                >
-                  Start game
-                </button>
               </div>
             </Surface>
-          </div>
+          ) : (
+            <div className="grid lobby-grid">
+              <Surface>
+                <div className="panel stack-lg">
+                  <div className="stack-md">
+                    <p className="eyebrow">Players</p>
+                    <div className="stack-sm">
+                      {lobby.players.map((player) => (
+                        <div key={player.id} className="list-row">
+                          <span>{player.name}</span>
+                          <div className="stack-inline">
+                            {player.id === playerId ? <span className="pill">you</span> : null}
+                            {player.isHost ? <span className="pill">host</span> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="stack-md">
+                    <div className="space-between wrap gap-sm">
+                      <p className="eyebrow">Rounds</p>
+                      <span className="muted">Hosts lock the match length here.</span>
+                    </div>
+                    <div className="round-count-row" role="group" aria-label="Choose round count">
+                      {ROUND_COUNT_OPTIONS.map((count) => {
+                        const active = lobby.config.roundCount === count;
+                        return (
+                          <button
+                            key={count}
+                            type="button"
+                            className={`round-count-button ${active ? 'round-count-button-active' : ''}`}
+                            data-testid={`round-count-${count}`}
+                            disabled={!isHost || busyAction === 'settings'}
+                            onClick={() => void updateSettings(undefined, count)}
+                          >
+                            {count} rounds
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="stack-sm">
+                    <p className="eyebrow">Start game</p>
+                    <button
+                      className="button button-primary lobby-start-button"
+                      data-testid="start-game"
+                      disabled={!isHost || lobby.players.length < 3 || busyAction === 'start' || busyAction === 'settings'}
+                      onClick={() => void runAction('start', `/api/lobbies/${lobby.code}/start`)}
+                    >
+                      Start game
+                    </button>
+                    {!me ? (
+                      <p className="muted">This browser has not joined the room yet. Use the join screen with this code to participate.</p>
+                    ) : (
+                      <p className="muted">Start once at least three players are in and the deck feels right.</p>
+                    )}
+                  </div>
+                </div>
+              </Surface>
+
+              <Surface>
+                <div className="panel stack-lg" data-testid="deck-setup">
+                  <div className="space-between wrap gap-sm">
+                    <div className="stack-sm">
+                      <p className="eyebrow">Deck preview</p>
+                    </div>
+                  </div>
+                  <div className="deck-preview-card">
+                    <DeckCard
+                      deck={selectedDeck}
+                      active
+                      imageTestId="selected-deck-art"
+                      footer={
+                        <div className="pill-row">
+                          <span className="pill">{selectedRoundCount} rounds</span>
+                        </div>
+                      }
+                    />
+                  </div>
+                  <a
+                    className="button button-secondary deck-preview-cta"
+                    href={deckBrowserHref}
+                    data-testid="change-deck"
+                  >
+                    Change deck
+                  </a>
+                </div>
+              </Surface>
+            </div>
+          )
         ) : currentRound ? (
           <div className="grid game-grid">
             <Surface>

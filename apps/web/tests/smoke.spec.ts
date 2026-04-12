@@ -59,7 +59,10 @@ async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page)
   await joinLobby(playerThreePage, code, 'Ken');
   await reloadIfFallback(hostPage);
 
+  await hostPage.getByTestId('change-deck').click();
+  await expect(hostPage.getByTestId('deck-browser')).toBeVisible();
   await hostPage.getByTestId('deck-card-relationship_party').click();
+  await hostPage.getByRole('link', { name: 'Back to lobby' }).click();
   await hostPage.getByTestId('round-count-5').click();
   await hostPage.getByTestId('start-game').click();
   await reloadAllIfFallback([hostPage, playerTwoPage, playerThreePage]);
@@ -109,6 +112,7 @@ test('host can configure deck setup, see deck artwork, and complete a five-round
   const code = await createLobby(page, `Host ${Date.now()}`);
   await expect(page.getByTestId('selected-deck-art')).toBeVisible();
   await expect(page.getByTestId('round-count-5')).toBeVisible();
+  await expect(page.getByTestId('change-deck')).toBeVisible();
 
   await playFiveRoundGame(browser, code, page);
 });
@@ -123,7 +127,9 @@ test('deck settings sync across browsers over Ably without manual refresh', asyn
   await watcherPage.goto(`/lobby/${code}`);
   await expect(watcherPage.getByRole('heading', { name: 'Decoy lobby' })).toBeVisible();
 
+  await page.getByTestId('change-deck').click();
   await page.getByTestId('deck-card-word_up').click();
+  await page.getByRole('link', { name: 'Back to lobby' }).click();
   await page.getByTestId('round-count-10').click();
 
   await expect(watcherPage.getByText('Word Up')).toBeVisible();
