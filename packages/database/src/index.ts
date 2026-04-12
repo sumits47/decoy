@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../generated/client';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -15,4 +15,4 @@ if (process.env.NODE_ENV !== 'production') {
   globalThis.__decoyPrisma__ = prisma;
 }
 
-export * from '@prisma/client';
+export * from '../generated/client';

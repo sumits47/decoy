@@ -7,4 +7,5 @@ coverage
 .env
 .env.local
 .vercel
+/packages/database/generated
 .DS_Store
