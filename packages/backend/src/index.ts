@@ -46,6 +46,10 @@ function normalizeCode(code: string) {
   return code.trim().toUpperCase();
 }
 
+function normalizePlayerName(name: string) {
+  return name.trim().toLowerCase();
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -112,9 +116,12 @@ async function requireLobby(code: string) {
   return deserializeLobby(lobbyRecord.stateJson);
 }
 
-async function saveLobby(lobby: LobbyState) {
+type LobbyStore = Pick<typeof prisma, 'lobby'>;
+type SessionStore = Pick<typeof prisma, 'playerSession'>;
+
+async function persistLobby(lobby: LobbyState, db: LobbyStore = prisma) {
   const snapshot = withNextRevision(lobby);
-  await prisma.lobby.upsert({
+  await db.lobby.upsert({
     where: { code: normalizeCode(snapshot.code) },
     create: {
       id: snapshot.id,
@@ -129,6 +136,11 @@ async function saveLobby(lobby: LobbyState) {
     }
   });
 
+  return snapshot;
+}
+
+async function saveLobby(lobby: LobbyState) {
+  const snapshot = await persistLobby(lobby);
   await publishLobbyUpdate(snapshot);
   return snapshot;
 }
@@ -164,9 +176,44 @@ function replaceCurrentRound(lobby: LobbyState, nextRound: RoundState): LobbySta
   };
 }
 
-async function createMembership(code: LobbyCode, player: Player): Promise<LobbyMembership> {
+function membershipFromSession(
+  code: LobbyCode,
+  session: { token: string; playerId: string; playerName: string }
+): LobbyMembership {
+  return {
+    code: normalizeCode(code),
+    playerId: session.playerId,
+    playerName: session.playerName,
+    playerSessionToken: session.token
+  };
+}
+
+async function getMembershipForPlayer(
+  code: LobbyCode,
+  playerId: PlayerId,
+  db: SessionStore = prisma
+): Promise<LobbyMembership | null> {
+  const session = await db.playerSession.findFirst({
+    where: {
+      lobbyCode: normalizeCode(code),
+      playerId
+    }
+  });
+  return session ? membershipFromSession(code, session) : null;
+}
+
+async function createMembershipWithStore(
+  code: LobbyCode,
+  player: Player,
+  db: SessionStore
+): Promise<LobbyMembership> {
+  const existingMembership = await getMembershipForPlayer(code, player.id, db);
+  if (existingMembership) {
+    return existingMembership;
+  }
+
   const playerSessionToken = createId('session');
-  await prisma.playerSession.create({
+  const session = await db.playerSession.create({
     data: {
       token: playerSessionToken,
       lobbyCode: normalizeCode(code),
@@ -174,14 +221,27 @@ async function createMembership(code: LobbyCode, player: Player): Promise<LobbyM
       playerName: player.name
     }
   });
-  return { code, playerId: player.id, playerName: player.name, playerSessionToken };
+  return membershipFromSession(code, session);
 }
 
-async function resolveSessionPlayerId(code: string, playerSessionToken: string): Promise<PlayerId | null> {
+async function resolveSessionPlayerId(
+  code: string,
+  playerSessionToken: string,
+  db: SessionStore = prisma
+): Promise<PlayerId | null> {
   if (!playerSessionToken.trim()) return null;
-  const session = await prisma.playerSession.findUnique({ where: { token: playerSessionToken } });
+  const session = await db.playerSession.findUnique({ where: { token: playerSessionToken } });
   if (!session) return null;
   return normalizeCode(session.lobbyCode) === normalizeCode(code) ? session.playerId : null;
+}
+
+function findPlayerByName(lobby: LobbyState, name: string) {
+  const normalizedName = normalizePlayerName(name);
+  if (!normalizedName) return null;
+
+  return (
+    lobby.players.find((player) => normalizePlayerName(player.name) === normalizedName) ?? null
+  );
 }
 
 async function requireSessionPlayer(lobby: LobbyState, playerSessionToken: string) {
@@ -199,10 +259,20 @@ async function requireHostSession(lobby: LobbyState, playerSessionToken: string)
 }
 
 export async function createLobbySession(hostName: string) {
-  const lobby = await saveLobby(createLobbyState(hostName));
-  const player = lobby.players.find((candidate) => candidate.id === lobby.hostPlayerId);
-  if (!player) throw new LobbyError(500, 'Could not create host session.');
-  return { lobby, player, membership: await createMembership(lobby.code, player) };
+  const result = await prisma.$transaction(async (tx) => {
+    const lobby = await persistLobby(createLobbyState(hostName), tx);
+    const player = lobby.players.find((candidate) => candidate.id === lobby.hostPlayerId);
+    if (!player) throw new LobbyError(500, 'Could not create host session.');
+
+    return {
+      lobby,
+      player: clone(player),
+      membership: await createMembershipWithStore(lobby.code, player, tx)
+    };
+  });
+
+  await publishLobbyUpdate(result.lobby);
+  return result;
 }
 
 export async function createLobby(hostName: string) {
@@ -218,34 +288,70 @@ export async function fetchSnapshot(code: string) {
 }
 
 export async function joinLobby(code: string, name: string, existingSessionToken?: string) {
-  const lobby = await requireLobby(code);
-  const existingPlayerId = await resolveSessionPlayerId(lobby.code, existingSessionToken ?? '');
-  if (existingPlayerId) {
-    const player = requirePlayer(lobby, existingPlayerId);
-    return {
-      lobby: clone(lobby),
-      player: clone(player),
-      membership: {
-        code: lobby.code,
-        playerId: player.id,
-        playerName: player.name,
-        playerSessionToken: existingSessionToken as string
-      }
-    };
-  }
-
-  const nextLobby = addPlayer(lobby, name || `Player ${lobby.players.length + 1}`);
-  if (nextLobby.players.length === lobby.players.length) {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
     throw new LobbyError(400, 'Enter a player name.');
   }
 
-  const player = nextLobby.players[nextLobby.players.length - 1] as Player | undefined;
-  if (!player) {
-    throw new LobbyError(500, 'Could not join lobby.');
+  const result = await prisma.$transaction(async (tx) => {
+    const lobbyRecord = await tx.lobby.findUnique({ where: { code: normalizeCode(code) } });
+    if (!lobbyRecord) throw new LobbyError(404, 'Lobby not found.');
+
+    const lobby = deserializeLobby(lobbyRecord.stateJson);
+    const existingPlayerId = await resolveSessionPlayerId(lobby.code, existingSessionToken ?? '', tx);
+    if (existingPlayerId) {
+      const player = requirePlayer(lobby, existingPlayerId);
+      return {
+        lobby: clone(lobby),
+        player: clone(player),
+        membership: membershipFromSession(lobby.code, {
+          token: existingSessionToken as string,
+          playerId: player.id,
+          playerName: player.name
+        }),
+        didChangeLobby: false
+      };
+    }
+
+    const matchingPlayer = findPlayerByName(lobby, trimmedName);
+    if (matchingPlayer) {
+      const existingMembership = await getMembershipForPlayer(lobby.code, matchingPlayer.id, tx);
+      if (existingMembership) {
+        throw new LobbyError(409, 'That name is already taken in this lobby.');
+      }
+
+      return {
+        lobby: clone(lobby),
+        player: clone(matchingPlayer),
+        membership: await createMembershipWithStore(lobby.code, matchingPlayer, tx),
+        didChangeLobby: false
+      };
+    }
+
+    const nextLobby = addPlayer(lobby, trimmedName);
+    const player = nextLobby.players[nextLobby.players.length - 1] as Player | undefined;
+    if (!player) {
+      throw new LobbyError(500, 'Could not join lobby.');
+    }
+
+    const savedLobby = await persistLobby(nextLobby, tx);
+    return {
+      lobby: savedLobby,
+      player: clone(player),
+      membership: await createMembershipWithStore(savedLobby.code, player, tx),
+      didChangeLobby: true
+    };
+  });
+
+  if (result.didChangeLobby) {
+    await publishLobbyUpdate(result.lobby);
   }
 
-  const savedLobby = await saveLobby(nextLobby);
-  return { lobby: savedLobby, player: clone(player), membership: await createMembership(savedLobby.code, player) };
+  return {
+    lobby: result.lobby,
+    player: result.player,
+    membership: result.membership
+  };
 }
 
 export async function startLobbyGame(code: string, actorSessionToken: PlayerSessionToken) {

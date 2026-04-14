@@ -33,10 +33,10 @@ export function CreateLobbyClient({ hostName }: { hostName: string }) {
             body: JSON.stringify({ hostName })
           }
         );
+        if (cancelled) return;
+
         storeMembership(data.membership);
-        if (!cancelled) {
-          setCreatedLobbyCode(data.lobby.code);
-        }
+        setCreatedLobbyCode(data.lobby.code);
       } catch (error) {
         if (!cancelled) {
           setStatus(error instanceof Error ? error.message : 'Unable to create lobby.');

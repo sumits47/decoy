@@ -24,6 +24,19 @@ async function joinLobby(page: Page, code: string, name: string) {
   await expect(page.getByRole('heading', { name: 'Decoy lobby' })).toBeVisible();
 }
 
+async function expectPlayerNameCount(page: Page, code: string, name: string, expectedCount: number) {
+  const response = await page.request.get(`/api/lobbies/${code}`);
+  expect(response.ok()).toBeTruthy();
+
+  const data = (await response.json()) as {
+    lobby: {
+      players: Array<{ name: string }>;
+    };
+  };
+
+  expect(data.lobby.players.filter((player) => player.name === name)).toHaveLength(expectedCount);
+}
+
 async function reloadIfFallback(page: Page) {
   if (!hasRealtime) {
     await page.reload();
@@ -75,7 +88,7 @@ async function voteFirstAvailable(page: Page) {
     .toBeGreaterThan(0);
 }
 
-async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page) {
+async function playFiveRoundGame(browser: Browser, code: string, hostName: string, hostPage: Page) {
   const playerTwoContext = await browser.newContext();
   const playerThreeContext = await browser.newContext();
   const playerTwoPage = await playerTwoContext.newPage();
@@ -91,6 +104,7 @@ async function playFiveRoundGame(browser: Browser, code: string, hostPage: Page)
     await hostPage.getByTestId('deck-card-relationship_party').click();
   });
   await hostPage.getByRole('link', { name: 'Back to lobby' }).click();
+  await expectPlayerNameCount(hostPage, code, hostName, 1);
   await waitForLobbyPost(hostPage, '/settings', async () => {
     await hostPage.getByTestId('round-count-5').click();
   });
@@ -145,18 +159,37 @@ test('home page loads without the old build badge section', async ({ page }) => 
 test('host can configure deck setup, see deck artwork, and complete a five-round smoke game', async ({ browser, page }) => {
   test.skip(!hasDatabase, 'DATABASE_URL is required for lobby smoke tests.');
 
-  const code = await createLobby(page, `Host ${Date.now()}`);
+  const hostName = `Host ${Date.now()}`;
+  const code = await createLobby(page, hostName);
   await expect(page.getByTestId('selected-deck-art')).toBeVisible();
   await expect(page.getByTestId('round-count-5')).toBeVisible();
   await expect(page.getByTestId('change-deck')).toBeVisible();
+  await expectPlayerNameCount(page, code, hostName, 1);
 
-  await playFiveRoundGame(browser, code, page);
+  await playFiveRoundGame(browser, code, hostName, page);
+});
+
+test('retrying a join name does not create duplicate lobby seats', async ({ page }) => {
+  test.skip(!hasDatabase, 'DATABASE_URL is required for lobby smoke tests.');
+
+  const code = await createLobby(page, `Retry Host ${Date.now()}`);
+  const firstJoin = await page.request.post(`/api/lobbies/${code}/join`, {
+    data: { name: 'Riya' }
+  });
+  expect(firstJoin.ok()).toBeTruthy();
+
+  const secondJoin = await page.request.post(`/api/lobbies/${code}/join`, {
+    data: { name: 'Riya' }
+  });
+  expect(secondJoin.status()).toBe(409);
+  await expectPlayerNameCount(page, code, 'Riya', 1);
 });
 
 test('deck settings sync across browsers over Ably without manual refresh', async ({ browser, page }) => {
   test.skip(!hasRealtime, 'DATABASE_URL and ABLY_API_KEY are required for realtime smoke tests.');
 
-  const code = await createLobby(page, `Realtime ${Date.now()}`);
+  const hostName = `Realtime ${Date.now()}`;
+  const code = await createLobby(page, hostName);
   const watcherContext = await browser.newContext();
   const watcherPage = await watcherContext.newPage();
 
@@ -169,6 +202,7 @@ test('deck settings sync across browsers over Ably without manual refresh', asyn
   });
   await expect(page.getByTestId('selected-deck-art')).toHaveAttribute('alt', 'Word Up');
   await page.getByRole('link', { name: 'Back to lobby' }).click();
+  await expectPlayerNameCount(page, code, hostName, 1);
   await waitForLobbyPost(page, '/settings', async () => {
     await page.getByTestId('round-count-10').click();
   });

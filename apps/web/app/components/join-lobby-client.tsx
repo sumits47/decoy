@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Surface } from '@decoy/ui';
 import type { LobbyMembership, Player } from '@decoy/types';
 import { api, getStoredMembership, storeMembership } from '../lib/lobby-client';
@@ -24,6 +24,7 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   const membership = useMemo(() => getStoredMembership(code), [code]);
   const [status, setStatus] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const joinInFlightRef = useRef(false);
 
   useEffect(() => {
     if (membership?.playerName) {
@@ -32,6 +33,9 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
   }, [membership]);
 
   const join = async () => {
+    if (joinInFlightRef.current) return;
+
+    joinInFlightRef.current = true;
     setJoining(true);
     setStatus(null);
 
@@ -48,6 +52,7 @@ export function JoinLobbyClient({ initialCode }: { initialCode: string }) {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Unable to join lobby.');
     } finally {
+      joinInFlightRef.current = false;
       setJoining(false);
     }
   };
